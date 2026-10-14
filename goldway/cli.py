@@ -48,7 +48,7 @@ def run(e, run_seconds=None):
         if remaining<=0:
             raise ValueError('Controlled intake window expired')
         run_seconds=min(run_seconds,remaining)
-    e.c['availability']='test_window' if run_seconds is not None else 'running_worker'
+    e.c['availability']='test_window' if run_seconds is not None or e.c.get('browser_test') is True else 'running_worker'
     # Only one worker may send from a database. Lock lives beside persistent DB.
     token=os.environ.get('TELEGRAM_BOT_TOKEN')
     if not token: raise ValueError('TELEGRAM_BOT_TOKEN missing')
