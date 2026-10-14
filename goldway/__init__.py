@@ -1,0 +1,1 @@
+"""GOLDWAY business assistant."""

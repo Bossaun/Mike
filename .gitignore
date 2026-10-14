@@ -1,0 +1,33 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.env
+config.json
+*.sqlite*
+state/
+secrets/
+wheelhouse/*
+!wheelhouse/.gitkeep
+
+# Private runtime data and downloaded build artifacts
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+*.pem
+*.key
+credentials*.json
+service-account*.json
+service_account*.json
+transcripts/
+exports/
+chat_exports/
+node_modules/
+build/
+dist/
+.DS_Store
+
+# Public synthetic configuration used by README/tests
+!examples/config.json

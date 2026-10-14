@@ -1,0 +1,4 @@
+aiogram>=3.20,<4
+gspread>=6.1,<7
+google-auth>=2.0,<3
+APScheduler>=3.10,<4

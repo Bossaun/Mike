@@ -1,0 +1,12 @@
+services:
+  goldway:
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 60s
+    env_file: .env
+    volumes:
+      - goldway-data:/data
+      - ./config.json:/run/config.json:ro
+      - ./secrets:/run/secrets:ro
+volumes:
+  goldway-data:

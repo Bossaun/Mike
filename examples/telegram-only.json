@@ -1,0 +1,53 @@
+{
+  "business": "GOLDWAY",
+  "admins": [
+    "boss"
+  ],
+  "employees": {
+    "boss": {
+      "name": "Руководитель",
+      "telegram_user_id": null
+    },
+    "alen": {
+      "name": "Ален",
+      "telegram_user_id": null
+    },
+    "nastya": {
+      "name": "Настя",
+      "telegram_user_id": null
+    }
+  },
+  "business_account_user_id": null,
+  "allowed_group_ids": [],
+  "live_send": false,
+  "recipients_verified": false,
+  "sheets_write": false,
+  "sheet_verified": false,
+  "spreadsheet_id": "",
+  "sheet_sync_seconds": 120,
+  "reminder_hours": 24,
+  "max_transcript_chars": 32000,
+  "model": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "max_output_tokens": 6000,
+    "max_context_chars": 44000,
+    "daily_budget": 1.0,
+    "input_per_million": 0.4,
+    "output_per_million": 1.6
+  },
+  "rules": [
+    "Сведения об отправленных и полученных товарах уточнять у Алена; о товарах у Насти — у Насти. Эти правила требуют подтверждения перед живым запуском.",
+    "Не угадывать местонахождение товара. Не изменять склад, финансы или оплаты."
+  ],
+  "timezone": "Europe/Moscow",
+  "review_mode": true,
+  "speaker_aliases": {},
+  "allowed_live_recipients": [
+    "boss"
+  ],
+  "allow_onboarding_replies": true,
+  "allow_registered_replies": true,
+  "meeting_recipient": null,
+  "group_destinations": {}
+}

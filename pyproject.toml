@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goldway-assistant"
+version = "0.1.0"
+description = "Event-driven GOLDWAY task assistant"
+requires-python = ">=3.11"
+dependencies = ["httpx==0.28.1", "gspread==6.2.1", "google-auth==2.40.3"]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.2"]
+
+[project.scripts]
+goldway = "goldway.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["goldway*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
