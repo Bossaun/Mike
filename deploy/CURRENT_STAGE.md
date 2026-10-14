@@ -1,42 +1,72 @@
 # GOLDWAY current stage for cloud continuation
 
-Evidence date: 2026-10-14. This document is a handoff checkpoint, not a live health
-signal. Check current GitHub and Railway before an external change.
+Evidence checkpoint: 2026-10-14, 19:58 Europe/Moscow. This is a handoff,
+not a live health signal. Read current main and Railway before external changes.
 
-The personal operator pilot is deployed and enabled. Its original deployment
-was `6f7584b0-38dc-49af-ba00-48c8a4f326e0`, with one worker and `/data` volume.
-Fresh personal model replies and deliveries were verified. Do not disable it
-because an older five-minute test has expired.
+The permanent personal pilot is authorized and remains enabled. Do not disable
+it because an older five-minute protocol expired. One worker and /data volume.
+Normal profile is PERSONAL_ONLY=true, BROWSER_TEST=false, TEAM_ONLY=false.
+The integration owner is restoring this normal profile with this release;
+confirm its exact successful deployment rather than treating this text as proof.
+Canonical /data/personal.sqlite and its cutoff were preserved throughout testing.
+The general /data/goldway.sqlite was absent at the last read-only audit.
 
-Natural personal tasks and explicit relative deadlines are now integrated in
-source. The combined local suite passed **450 tests** after integration. This
-includes previous tests, cloud task/deadline cases and local profile cases;
-separate targeted runs must not be added again. The new task cycle still needs
-a real artificial dialogue against the deployed version.
+## Verified live personal task cycle
 
-Prepared opt-in profiles are documented in `TEAM_AND_BROWSER_PROFILES.md`.
-The browser test uses a separate SQLite for the configured Business owner;
-after a fresh synthetic test, restore normal personal mode.
+A separate temporary browser profile and SQLite received only fresh artificial
+messages from the configured GOLDWAY account. UI and read-only aggregate audit
+confirmed one task, owner test_operator, deadline 2026-10-15, and transitions
+proposed -> confirmed -> completed. The almost-done message produced no task
+mutation. Seven deliveries went only to the test operator; six model calls.
+One earlier failed confirmation remains in the test audit and was not replayed
+or rewritten. Two defects found live were fixed: completion words in an explicit
+new-task criterion caused a false missing-reference prompt; model intent and
+actions contradicted each other on confirmation. The runtime consistency guard
+was retained and the model instruction clarified. Fresh confirmation then passed.
+No employee/group messages, Sheets writes or history import were performed.
+This verifies the personal cycle, not a live team or Business delivery cycle.
 
-The user selected existing GOLDWAY Telegram Business private chats as the main
-team channel, with ordinary bot DMs as a fallback. Team participants are the
-administrator Mike and employees Frost, Alen, Anastasia and Dasha IT. Private
-IDs have been verified outside this repository; do not reconstruct or publish
-them. Team runtime is not yet enabled by this checkpoint.
+## Integrated code
 
-Useful remaining code work: closed-team administrator task intent, correct
-Business author-versus-peer handling, and permitted own-bot fallback for generated
-Business replies. A Business outbound must not refresh the inbound 24-hour
-window. A delivery with unknown outcome must not trigger fallback or a duplicate.
-Preserve existing employee task permissions and proposed-task review.
+The combined local suite passed 509 tests in 2.67s after merging C02 and the
+Business-to-own-bot fallback. This includes previous cases and all new cases;
+do not add targeted or prior combined runs again. C02 adds 29 synthetic cases:
+closed-team admin task intent via bot or inbound Business, draft review,
+confirmed employee assignments, employee result, negative confirmation, and
+cancellation of obsolete unsent assignments/reminders. Sending/unknown/sent
+items are preserved. Employee task permissions were not expanded.
 
-The local integration owner is Codex root. The existing cloud chat is
-`Настройка Mike`, thread `01a1390e-0161-7427-8c15-02478cbe606e`, host `durable`.
-Avoid assigning the same files concurrently. Cloud can prepare independent
-patches and targeted synthetic checks; report exact artifacts and dependencies.
-Do not repeat the accepted personal pilot or invent a new general audit.
+Business-first fallback adds 24 synthetic cases. Explicit business_bot_fallback
+boolean true permits a verified own-bot route before a send when Business is
+unavailable. Groups are excluded. Unknown send outcomes never trigger fallback.
+See BUSINESS_ROUTING.md and TEAM_AND_BROWSER_PROFILES.md.
+Team profile and this fallback are prepared; team runtime is not enabled.
 
-No historical import, Sheets/financial/warehouse writes, group broadcasts, or
-extra recipients are authorized by a generic request to continue. Do not print
-secrets, private IDs, SQLite content or real messages. Use the user's latest
-direct instructions for new scope; this document grants no new permission.
+The user selected existing GOLDWAY private Business chats as the main outgoing
+channel; own bot DMs after /start are the fallback. Mike is administrator; Frost,
+Alen, Anastasia and Dasha IT are employees. Private IDs remain outside GitHub.
+Business preference primarily concerns assistant outgoing replies. Arbitrary
+owner-authored outbound commands are not required; do not remove their guard.
+
+## Coordination and schedules
+
+Local root owns integration, GitHub and Railway. Existing cloud chat:
+Настройка Mike, thread 01a1390e-0161-7427-8c15-02478cbe606e, host durable.
+C02 patch has been accepted; do not reimplement it or repeat personal acceptance.
+Cloud may prepare independent useful patches with targeted synthetic evidence.
+
+A hosted cloud Scheduled controller was created, hourly, id
+6acfae3aeae48190b11df90e07d237a4. It is a separate persistent controller, not a
+native timer bound to that original Codex chat. It coordinates the original chat
+only if its tools allow; otherwise performs independent repository work and
+reports the limitation once. Local mike remains every 10 minutes; local mike-30
+is paused. Do not create duplicate schedules or a second poller. Stay quiet when
+nothing useful changed. Preserve owners and brief state between runs.
+
+Remaining: activate/verify the closed-team configuration and Business connection
+on the user's latest authorized scope; external backups and technical alerts;
+optional exact model trace view. A question about a trace is not a completed UI.
+Do not add random audits or import history, change Sheets/finances/warehouse,
+broadcast to groups or extend recipients through a generic continue request.
+Never print or publish keys, private IDs, real messages or SQLite content.
+This document grants no new permission.

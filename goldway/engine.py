@@ -56,11 +56,21 @@ class Engine:
             return added
 
     def _operator_turn(self,p,kind):
+        if 'team_intake' in self.c:
+            return (kind=='reply' and p.get('channel') in ('bot','business')
+                    and p.get('sender') in self.c.get('admins',[]) and self._closed_team())
         gate=self.c.get('personal_intake')
         if not (kind=='reply' and p.get('channel')=='bot' and isinstance(gate,dict)
                 and gate.get('recipient')==p['sender'] and p['sender'] in self.c['admins']):return False
         from .intake import validate_personal
         try:validate_personal(self.c)
+        except (ValueError,TypeError,KeyError):return False
+        return True
+
+    def _closed_team(self):
+        if 'team_intake' not in self.c:return False
+        from .intake import validate_team
+        try:validate_team(self.c)
         except (ValueError,TypeError,KeyError):return False
         return True
 
@@ -172,8 +182,11 @@ class Engine:
                 source=p.get('source_id') or event_id
                 self.s.execute('INSERT INTO sources(business,id,body,link) VALUES(?,?,?,?) ON CONFLICT(business,id) DO UPDATE SET body=excluded.body,link=excluded.link',
                                (self.b,source,p['text'],p.get('link',event_id)))
-                changed=[]
+                changed=[];before={}
                 for a in actions:
+                    if operator and self._closed_team() and a.get('op')=='update':
+                        row=self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,a.get('task_id'))).fetchone()
+                        if row:before.setdefault(row['id'],dict(row))
                     if (kind=='transcript' or operator) and self.c.get('review_mode') and a.get('op')=='create':
                         a=dict(a,status='proposed')
                     changed.append(self._apply(a,context,source,kind,p))
@@ -203,6 +216,11 @@ class Engine:
                         if missing:body+='\n\nНужно уточнить: '+', '.join(missing)+'.'
                         if t['status']=='proposed':body+='\nПодтвердите поручение или поправьте детали.'
                         for question in context.get('deadline_questions',[])+context.get('owner_questions',[]):body+='\n'+question
+                        previous=before.get(id)
+                        if (previous and t['status'] in ('confirmed','in_progress','blocked')
+                                and t['owner'] and t['owner']!=p['sender']
+                                and any(t[f]!=previous[f] for f in ('title','owner','deadline','next_step','criterion','status'))):
+                            recipients.append(t['owner'])
                     elif kind=='reply' and p.get('channel')=='group':
                         from .presentation import task_card
                         recipients=[p['sender']];body=task_card(t,self.c)
@@ -218,7 +236,16 @@ class Engine:
                         if not t['criterion']: missing.append('Какой результат подтвердит завершение?')
                         body=f"Задача №{t['public_number']} · {t['title']}\nСледующий шаг: {t['next_step']}\nСрок: {t['deadline'] or 'не указан'}\n"+' '.join(missing or ['Сообщите результат или препятствие.'])
                     for recipient in recipients:
-                        queued=self.s.queue(self.b,recipient,body,f"action:{id}:{t['revision']}:{recipient}",self.now(),id,parse_mode='HTML' if operator or (kind=='reply' and p.get('channel')=='group') else None,preferred_transport=p.get('channel') if kind=='reply' and recipient==p['sender'] else None)
+                        message=body;key=f"action:{id}:{t['revision']}:{recipient}"
+                        if operator and recipient!=p['sender']:
+                            from .presentation import task_card
+                            display=dict(self.c,employees=dict(self.c['employees']))
+                            display['employees'][recipient]=dict(self.c['employees'][recipient],name='Вы')
+                            message=task_card(t,display)+'\n\nСообщите результат, препятствие или следующий шаг обычным текстом с номером задачи.'
+                            if not t['deadline']:message+='\nУточните срок.'
+                            if not t['criterion']:message+='\nКакой результат подтвердит завершение?'
+                            key=f"assignment:{id}:{t['revision']}:{recipient}"
+                        queued=self.s.queue(self.b,recipient,message,key,self.now(),id,parse_mode='HTML' if operator or (kind=='reply' and p.get('channel')=='group') else None,preferred_transport=p.get('channel') if kind=='reply' and recipient==p['sender'] else None)
                         action_queued=action_queued or queued
                 questions=context.get('deadline_questions',[])+context.get('owner_questions',[])
                 if operator and questions and not action_queued:
@@ -326,6 +353,7 @@ class Engine:
                 if old['status']=='proposed': raise ValueError('Only admin may confirm proposal')
             if operator and old['status']=='proposed' and a.get('status') in ('confirmed','in_progress','blocked'):
                 explicit=bool(re.search(r'\b(подтверждаю|утверждаю|подтверждаем|беру)\b',evidence.casefold()))
+                explicit=explicit and not re.search(r'\bне\s+(подтверждаю|утверждаю|подтверждаем|беру)\b',evidence.casefold())
                 simple_yes=evidence.strip().casefold().strip(' .!')=='да' and len(context['tasks'])==1
                 if not (explicit or simple_yes):raise ClarificationRequired('Draft requires explicit confirmation','Подтвердите черновик задачи или поправьте детали.')
             if a.get('status')=='completed':
@@ -344,6 +372,10 @@ class Engine:
                 return id
             sql=','.join(f'{k}=?' for k in values)
             self.s.execute(f'UPDATE tasks SET {sql},revision=revision+1 WHERE business=? AND id=?',(*values.values(),self.b,id))
+            if self._closed_team() and any(k in values and values[k]!=old[k] for k in ('title','owner','deadline','next_step','criterion','status')):
+                self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'assignment:%'",(self.b,id))
+                if ('owner' in values and values['owner']!=old['owner']) or values.get('status') in ('completed','proposed'):
+                    self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'reminder:%'",(self.b,id))
         self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)',(self.b,id,source))
         return id
 
