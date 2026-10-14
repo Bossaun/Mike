@@ -63,7 +63,13 @@ class Dispatcher:
                     return {'chat_id':row['business_chat'],'business_connection_id':row['connection']},'business'
             except DeliveryError:
                 pass  # A failed rights lookup cannot authorize a Business send.
-        if preferred in (None,'bot') and row['bot_chat']:
+        # Explicit Business-first fallback is resolved before the single send.
+        # Private inbound (/start) persists bot_chat; it must match this employee.
+        employee=self.c.get('employees',{}).get(recipient,{})
+        uid=employee.get('telegram_user_id') if isinstance(employee,dict) else None
+        bot_fallback=(preferred=='business' and self.c.get('business_bot_fallback') is True
+                      and type(uid) is int and uid>0 and str(row['bot_chat'])==str(uid))
+        if (preferred in (None,'bot') or bot_fallback) and row['bot_chat']:
             return {'chat_id':row['bot_chat']},'bot'
         if preferred in (None,'group') and row['group_chat']:
             try:
