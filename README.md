@@ -337,3 +337,7 @@ allow_registered_replies=true допускает ответы уже подтв�
 См. [PUBLICATION_VALIDATION.md](PUBLICATION_VALIDATION.md): 98 + 69 тестов,
 исправления Dockerfile и границы локальной проверки. reference_pilot проверяется
 в отдельном venv из своего каталога (`pytest -q -o addopts=''`).
+
+Для Railway используйте [deploy/RAILWAY.md](deploy/RAILWAY.md):
+`python -m goldway.railway`, приватная GOLDWAY_CONFIG_JSON и
+GOLDWAY_WORKER_ENABLED=false до отдельного разрешения запуска.

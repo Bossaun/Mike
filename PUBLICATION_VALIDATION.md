@@ -38,3 +38,15 @@ Railway setup still required (main service only):
 - Backups stored separately from the persistent volume; restore tested separately.
 
 Archive SHA-256: 92374561a4323a2dba017e116dbf89f12f643893ce242900f08b03cd43e8b571
+
+## Railway preparation follow-up
+
+Added goldway.railway bootstrap and four behavior checks. Updated main suite:
+102 passed on macOS Python 3.12. Reference code unchanged (69 previously passed).
+Wheel packaging passed again. Private configuration validated offline and kept
+outside the repository. GOLDWAY_WORKER_ENABLED defaults false; disabled worker
+performs no polling/model calls/database writes and exits normally on SIGTERM.
+Tests verify atomic private config writing (mode 600), invalid-config rollback,
+preservation of existing SQLite and sanitized failure without private config.
+Root-owned mounted-volume recovery/UID drop and Docker image/runtime still require
+Linux/Railway verification. See deploy/RAILWAY.md for the updated start command.
