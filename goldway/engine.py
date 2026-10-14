@@ -133,7 +133,10 @@ class Engine:
                 context['kind']='operator_chat'
                 context['tasks']=self._operator_candidates(p)
                 context['availability']=self.c.get('availability','development')
-            ambiguous=kind=='reply' and not context['tasks'] and (p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold()) or re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold()))
+            explicit_reference=p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())
+            explicit_creation=operator and re.search(r'\bсоздай(?:те)?\s+(?:(?:новую|тестовую)\s+)*задачу\b',p['text'].casefold())
+            completion_phrase=re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())
+            ambiguous=kind=='reply' and not context['tasks'] and (explicit_reference or (completion_phrase and not explicit_creation))
             if ambiguous and not general:
                 message='Уточните задачу: ответьте на сообщение о ней или укажите её номер.'
                 result={'actions':[],'summary':message,'reply_text':message,'intent':'conversation'}

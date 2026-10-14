@@ -234,6 +234,64 @@ def test_instruction_with_general_chat_words_still_creates_draft(personal):
     assert e.tasks()[0]['status']=='proposed'
 
 
+def test_explicit_creation_with_ready_criterion_creates_literal_draft(personal):
+    e,s,c,clock=personal
+    text='Создай тестовую задачу „Проверка ALPHA-1431“: я сделаю контрольный список завтра. Критерий завершения — готов список из трёх пунктов: А, Б, В.'
+    action=creation(text)
+    action.update(title='Проверка ALPHA-1431',next_step='Составить контрольный список',
+                  criterion='Готов список из трёх пунктов: А, Б, В.',deadline_lines=[1])
+    class CheckModel:
+        calls=0
+        def propose(self,context):
+            self.calls+=1
+            assert context['kind']=='operator_chat' and not context['tasks']
+            return result([action])
+    model=CheckModel();e.model=model;api=API()
+    Updates(e,api,999).handle(message(clock,text,1431));e.process('update:1431')
+    assert len(e.tasks())==1
+    task=e.tasks()[0]
+    from datetime import timedelta
+    tomorrow=datetime.fromtimestamp(clock[0],ZoneInfo(c['timezone'])).date()+timedelta(days=1)
+    assert model.calls==1 and task['status']=='proposed'
+    assert task['title']=='Проверка ALPHA-1431' and task['owner']=='test_operator'
+    assert task['deadline']==tomorrow.isoformat() and task['evidence']==text
+    assert task['criterion']==action['criterion'] and task['public_number']==1
+    assert 'Уточните задачу' not in s.rows('SELECT text FROM outbox')[0]['text']
+    assert not api.calls
+
+
+@pytest.mark.parametrize('text,task_id',[
+    ('Создай задачу №999: готов список из трёх пунктов.',None),
+    ('Создай тестовую задачу: готов список из трёх пунктов.','missing'),
+    ('Готов список из трёх пунктов.',None),
+])
+def test_creation_exception_keeps_unknown_references_and_bare_completion_closed(personal,text,task_id):
+    e,s,c,clock=personal
+    class NoModel:
+        def propose(self,context):raise AssertionError('Ambiguous reference must not reach the model')
+    e.model=NoModel();e.reply('ambiguous','test_operator',text,task_id=task_id,channel='bot');e.process('ambiguous')
+    assert not e.tasks()
+    assert s.rows('SELECT text FROM outbox')[0]['text'].startswith('Уточните задачу:')
+
+
+def test_employee_creation_with_ready_criterion_does_not_open_operator_exception(env):
+    e,s,c,clock=env
+    class NoModel:
+        def propose(self,context):raise AssertionError('Unverified role must not open creation exception')
+    e.model=NoModel()
+    e.reply('employee','alen','Создай тестовую задачу: готов список из трёх пунктов.',channel='bot');e.process('employee')
+    assert not e.tasks()
+    assert s.rows('SELECT text FROM outbox')[0]['text'].startswith('Уточните задачу:')
+
+
+def test_creation_exception_does_not_accept_invented_evidence(personal):
+    e,s,c,clock=personal;text='Создай тестовую задачу: готов список из трёх пунктов. Ответственный я.'
+    action=creation(text);action.pop('evidence_lines');action['evidence']='Invented synthetic evidence'
+    e.model=ScriptedModel(result([action]));e.reply('invented','test_operator',text,channel='bot')
+    with pytest.raises(ValueError,match='Missing literal evidence'):e.process('invented')
+    assert not e.tasks()
+
+
 def test_long_private_text_is_not_mistaken_for_a_meeting(personal):
     e,s,c,clock=personal
     text='Напиши текст приглашения на встречу. '+('Нужно обсудить подготовку и сверить список. '*12)
