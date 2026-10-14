@@ -13,6 +13,9 @@ def load(path):
     if c.get('sheets_write') and not c.get('sheet_verified'): raise ValueError('Verify pilot workbook before enabling writes')
     if 'test_intake' in c:
         raise ValueError('Use controlled_intake; legacy test_intake is unsupported')
+    if 'personal_intake' in c:
+        from .intake import validate_personal
+        validate_personal(c)
     if 'controlled_intake' in c:
         gate=c['controlled_intake']
         if not isinstance(gate,dict) or gate.get('recipient')!='test_operator':
