@@ -35,12 +35,21 @@ through their ordinary bot DM or Business chat; old messages, edits, forwards an
 attachments are rejected before events. Replies require a fresh parent on the
 same route. Own-bot parents need a verified bot identity.
 
-This is channel preparation, not a completed team rollout. The current natural
-task-intent path is still personal-operator-only. Owner-authored Business task
-creation and universal Business-to-bot fallback require separate integration.
-The existing automatic route can choose a verified own bot when Business rights
-or its 24-hour window are unavailable; an explicitly preferred Business reply
-stays blocked. An unknown send is never retried through another route.
+This is channel preparation, not a completed team rollout. Integrated C02
+supports administrator task intents over the own bot or inbound Business,
+reviewed drafts, confirmed employee assignments, and employee task results.
+Integrated C03 supports employee conversations and grounded relative deadlines.
+These behaviors passed the 614-test combined synthetic suite documented in
+CURRENT_STAGE.md; live team and Business delivery are not yet verified.
+Arbitrary owner-authored outbound Business commands remain intentionally gated.
+
+Business is the preferred outgoing assistant route. The existing automatic route
+can choose a verified own bot when Business rights or the 24-hour reply window
+are unavailable. For explicitly Business-preferred deliveries, an own-bot fallback
+is available only with business_bot_fallback set to the JSON boolean true and an
+already verified private bot route after /start. It never falls back to a group.
+Unknown send outcomes are never automatically retried on another route.
+See BUSINESS_ROUTING.md for route and receipt invariants.
 
 Do not enable this profile by reverting to an old broad configuration. Actual
 member IDs, configuration and credentials belong only in private server storage.
