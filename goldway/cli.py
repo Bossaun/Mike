@@ -35,6 +35,31 @@ def pending(e, updates=None, should_stop=lambda:False):
             print(f"Event {ev['id']}: {type(exc).__name__}; inspect local events.error",file=sys.stderr)
 
 
+def register_team_bot_identity(config, bot):
+    """Bind the closed team reply gate to the authenticated getMe identity."""
+    if 'team_intake' not in config:
+        return
+    from .intake import validate_team
+    ids, account, _ = validate_team(config)
+    if (not isinstance(bot, dict) or type(bot.get('id')) is not int
+            or bot['id'] <= 0 or bot['id'] in ids or bot['id'] == account
+            or bot.get('is_bot') is not True):
+        raise ValueError('Closed team requires an authenticated distinct bot identity')
+    if ('bot_user_id_verified' in config
+            and type(config['bot_user_id_verified']) is not bool):
+        raise ValueError('Closed team bot verification metadata must be boolean')
+    if 'bot_user_id' in config:
+        configured = config['bot_user_id']
+        if (type(configured) is not int or configured <= 0
+                or configured in ids or configured == account):
+            raise ValueError('Closed team bot identity must be distinct and confirmed')
+        if config.get('bot_user_id_verified') is True and configured != bot['id']:
+            raise ValueError('Authenticated bot differs from the confirmed team bot identity')
+    candidate = dict(config, bot_user_id=bot['id'], bot_user_id_verified=True)
+    validate_team(candidate)
+    config.update(bot_user_id=bot['id'], bot_user_id_verified=True)
+
+
 def run(e, run_seconds=None):
     if 'controlled_intake' in e.c:
         # Validate even when callers constructed Engine without config.load.
@@ -53,6 +78,7 @@ def run(e, run_seconds=None):
     token=os.environ.get('TELEGRAM_BOT_TOKEN')
     if not token: raise ValueError('TELEGRAM_BOT_TOKEN missing')
     api=Telegram(token); bot=api.call('getMe')
+    register_team_bot_identity(e.c, bot)
     if bot.get('username'):e.c['bot_username']=bot['username']
     bootstrap_groups(e.s,e.c)
     updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api); dispatch.recover()

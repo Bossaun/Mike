@@ -28,7 +28,7 @@ This verifies the personal cycle, not a live team or Business delivery cycle.
 
 ## Integrated code
 
-The combined local suite passed 509 tests in 2.67s after merging C02 and the
+The combined local suite passed 614 tests in 3.06s after merging C03, runtime bot identity, and the
 Business-to-own-bot fallback. This includes previous cases and all new cases;
 do not add targeted or prior combined runs again. C02 adds 29 synthetic cases:
 closed-team admin task intent via bot or inbound Business, draft review,
@@ -47,6 +47,15 @@ channel; own bot DMs after /start are the fallback. Mike is administrator; Frost
 Alen, Anastasia and Dasha IT are employees. Private IDs remain outside GitHub.
 Business preference primarily concerns assistant outgoing replies. Arbitrary
 owner-authored outbound commands are not required; do not remove their guard.
+
+C03 adds 67 synthetic cases for employee conversation, grounded relative dates,
+manager notices, and receipt preservation on model failure. Relative dates use
+the original Telegram message timestamp when available; an uncertain date does
+not clear a known deadline. Employee roles and task ownership remain restricted.
+The runtime binds closed-team own-bot identity from authenticated getMe before
+handlers; 38 new cases verify own reply parents and conflicting identity rejection.
+These cases are included in the 614 combined result, not extra totals. New staff
+behavior remains synthetic-verified until closed-team runtime is activated.
 
 ## Coordination and schedules
 

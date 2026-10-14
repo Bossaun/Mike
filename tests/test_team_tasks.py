@@ -96,7 +96,7 @@ def test_admin_draft_confirmation_delivery_employee_result(team,channel):
     assert '👤 Вы' in assigned[0]['text'] and assigned[0]['preferred_transport'] is None
     assert task['status']=='confirmed'
     text='Задача №1: список из трёх пунктов подготовлен и сохранён в TEST.txt.'
-    process(team,text,12,{'actions':[update(task,status='completed')],'summary':'Получен конкретный результат.'},sender='alen')
+    process(team,text,12,result([update(task,status='completed')],reply='Спасибо, результат зафиксирован.'),sender='alen')
     assert engine.tasks()[0]['status']=='completed'
     assert 'Выполнено:' in store.rows('SELECT text FROM outbox ORDER BY id DESC LIMIT 1')[0]['text']
     assert store.rows('SELECT recipient FROM outbox ORDER BY id DESC LIMIT 1')[0]['recipient']=='test_operator'

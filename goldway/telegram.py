@@ -239,7 +239,7 @@ class Updates:
         elif sender in self.c['admins'] and (text.startswith('/meeting ') or (not personal_operator and not parent and (m.get('document') or (len(text)>400 or any(text.casefold().startswith(person['name'].casefold()+':') for person in self.c['employees'].values()) or any(text.startswith(label+':') for label in self.c.get('speaker_aliases',{}))) and not text.startswith('/') and not self.e.reference_ids(text)))):
             self.e.transcript(text.removeprefix('/meeting '),source)
         else:
-            self.e.reply(f"update:{update['update_id']}",sender,text,task_id,source,'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
+            self.e.reply(f"update:{update['update_id']}",sender,text,task_id,source,'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'),message_at=m.get('date'))
 
 
 def bootstrap_groups(store,config):
