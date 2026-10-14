@@ -3,11 +3,14 @@ import json
 import re
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 STATUSES = {'confirmed','proposed','in_progress','blocked','completed'}
 FIELDS = {'title','owner','deadline','next_step','criterion','status','evidence'}
+REFERENCE_PATTERN = r'(?:№|#|задач[ауеи]?\s*)(?:\s*№)?\s*(\d+)'
+from .conversation import basic_reply, is_general
 
 def fingerprint(text):
     return hashlib.sha256(' '.join(text.casefold().split()).encode()).hexdigest()
@@ -34,11 +37,26 @@ class Engine:
     def reply(self, event_id, sender, text, task_id=None, source_id=None, channel=None):
         if sender not in self.c['employees'] and sender not in self.c['admins']:
             return False
-        return self.s.event(self.b,event_id,'reply',{'sender':sender,'text':text,'task_id':task_id,
-                                                   'source_id':source_id or event_id,'link':event_id,'channel':channel})
+        payload={'sender':sender,'text':text,'task_id':task_id,
+                 'source_id':source_id or event_id,'link':event_id,'channel':channel,
+                 'received_at':self.now()}
+        with nullcontext() if self.s.db.in_transaction else self.s.transaction():
+            added=self.s.event(self.b,event_id,'reply',payload)
+            if added and not is_general(text):
+                context=self._context(payload,'reply')
+                if len(context['tasks'])==1:
+                    self._record_response(context['tasks'][0]['id'],sender,payload['received_at'])
+            return added
+
+    def _record_response(self, task_id, sender, received_at):
+        changed=self.s.execute('UPDATE tasks SET last_reply=MAX(COALESCE(last_reply,0),?) WHERE business=? AND id=? AND owner=?',
+                               (received_at,self.b,task_id,sender)).rowcount
+        if changed:
+            self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND recipient=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'reminder:%' AND created<=?",
+                           (self.b,task_id,sender,received_at))
 
     def reference_ids(self,text):
-        numbers={int(n) for n in re.findall(r'(?:№|#|задач[ауеи]?\s*)(?:\s*№)?\s*(\d+)',text.casefold())}
+        numbers={int(n) for n in re.findall(REFERENCE_PATTERN,text.casefold())}
         return {t['id'] for t in self.tasks() if t['id'] in text or t.get('public_number') in numbers}
 
     def queue_meeting_review(self,tasks,key,recipient):
@@ -56,7 +74,7 @@ class Engine:
             words=set(re.findall(r'\w+',p['text'].casefold()))
             allowed=sorted([t for t in allowed if t['status']!='completed'],
                 key=lambda t:len(words & set(re.findall(r'\w+',t['title'].casefold()))),reverse=True)
-        if kind=='reply' and not p.get('task_id') and len(allowed)>1:
+        if kind=='reply' and not p.get('task_id') and (len(allowed)>1 or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())):
             # Free text cannot silently choose one of several tasks without a reference.
             mentioned=[t for t in allowed if t['id'] in self.reference_ids(p['text']) or t['title'].casefold() in p['text'].casefold()]
             allowed=mentioned
@@ -78,8 +96,8 @@ class Engine:
         p=json.loads(event['payload']); kind=event['kind']
         try:
             context=self._context(p,kind)
-            general=kind=='reply' and bool(re.search(r'общаться|что (?:ты )?умеешь|кто ты|как тебя зовут|как дела',p['text'].casefold()))
-            ambiguous=kind=='reply' and not context['tasks'] and (p.get('task_id') or self.reference_ids(p['text']) or re.search(r'готов|заверш|сделал|сделано|закончил',p['text'].casefold()))
+            general=kind=='reply' and is_general(p['text'])
+            ambiguous=kind=='reply' and not context['tasks'] and (p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold()) or re.search(r'готов|заверш|сделал|сделано|закончил',p['text'].casefold()))
             if ambiguous and not general:
                 result={'actions':[],'summary':'Уточните задачу: ответьте на сообщение о ней или укажите её номер.'}
             else:
@@ -88,13 +106,19 @@ class Engine:
                     visible=self.tasks() if p['sender'] in self.c['admins'] else self.tasks(p['sender'])
                     context['task_overview']={status:sum(t['status']==status for t in visible) for status in STATUSES}
                     context['availability']=self.c.get('availability','development')
-                result=self.model.propose(context)
+                direct=basic_reply(p['text']) if context['kind']=='conversation' else None
+                result=({'actions':[],'summary':'Объяснены возможности помощника.','reply_text':direct} if direct else self.model.propose(context))
                 if context['kind']=='conversation' and result.get('actions'):
                     raise ValueError('General conversation cannot modify tasks')
-                self.s.audit(self.b,'model_proposal',{'event':event_id,'result':result},self.now())
+                self.s.audit(self.b,'deterministic_reply' if direct else 'model_proposal',{'event':event_id,'result':result},self.now())
             actions=result.get('actions')
             if not isinstance(actions,list) or len(actions)>20: raise ValueError('Invalid action list')
             if not isinstance(result.get('summary',''),str): raise ValueError('Invalid summary')
+            reply_text=result.get('summary','')
+            if context['kind']=='conversation':
+                reply_text=result.get('reply_text')
+                if not isinstance(reply_text,str) or not reply_text.strip() or len(reply_text)>3000:
+                    raise ValueError('Conversation requires a direct reply_text')
             with self.s.transaction():
                 # Re-check event after model call to guard replay by another process.
                 state=self.s.execute('SELECT state FROM events WHERE business=? AND id=?',(self.b,event_id)).fetchone()[0]
@@ -107,10 +131,9 @@ class Engine:
                     if kind=='transcript' and self.c.get('review_mode') and a.get('op')=='create':
                         a=dict(a,status='proposed')
                     changed.append(self._apply(a,context,source,kind,p))
-                if kind=='reply':
+                if kind=='reply' and context['kind']!='conversation':
                     for t in context['tasks']:
-                        self.s.execute('UPDATE tasks SET last_reply=? WHERE business=? AND id=? AND owner=?',(self.now(),self.b,t['id'],p['sender']))
-                        self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND state='pending' AND recipient=?",(self.b,t['id'],p['sender']))
+                        self._record_response(t['id'],p['sender'],p.get('received_at',self.now()))
                 if kind=='transcript' and self.c.get('review_mode'):
                     from .presentation import meeting_messages
                     reviewed=[dict(self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,t)).fetchone()) for t in dict.fromkeys(changed)]
@@ -136,11 +159,13 @@ class Engine:
                     for recipient in recipients:
                         self.s.queue(self.b,recipient,body,f"action:{id}:{t['revision']}:{recipient}",self.now(),id,parse_mode='HTML' if kind=='reply' and p.get('channel')=='group' else None,preferred_transport=p.get('channel') if kind=='reply' and recipient==p['sender'] else None)
                 if not actions and kind=='reply':
-                    self.s.queue(self.b,p['sender'],result.get('summary') or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
+                    self.s.queue(self.b,p['sender'],reply_text or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                 self.s.audit(self.b,'processed',{'event':event_id,'sender':p['sender'],'tasks':changed,'summary':result.get('summary','')[:2000]},self.now())
         except Exception as exc:
             self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__+': '+str(exc)[:300],self.b,event_id))
+            if kind=='reply':
+                self.s.queue(self.b,p['sender'],'Я получил сообщение, но сейчас не могу его обработать. Попробуйте ещё раз чуть позже.',f'error:{event_id}',self.now(),preferred_transport=p.get('channel'))
             raise
 
     def _apply(self,a,context,source,kind,p):

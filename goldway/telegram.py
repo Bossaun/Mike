@@ -114,6 +114,9 @@ class Updates:
         return None
 
     def handle(self, update):
+        from .intake import accepts
+        if not accepts(update, self.c, self.e.now()):
+            return
         if self.s.db.in_transaction:
             return self._handle(update)
         with self.s.transaction():

@@ -50,3 +50,11 @@ Tests verify atomic private config writing (mode 600), invalid-config rollback,
 preservation of existing SQLite and sanitized failure without private config.
 Root-owned mounted-volume recovery/UID drop and Docker image/runtime still require
 Linux/Railway verification. See deploy/RAILWAY.md for the updated start command.
+
+## Combined corrections
+
+207 combined main tests passed; 7 fake-process supervisor checks passed separately.
+Reply receipt and direct conversation reply_text corrections were merged with
+controlled_intake validation. Six exact operational-snippet checks passed locally.
+Docker copies operations for the finite authorized test supervisor. All prior
+server state stays disabled until an explicitly authorized isolated test.

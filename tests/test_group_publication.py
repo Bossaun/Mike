@@ -109,7 +109,7 @@ def test_general_chat_does_not_require_task_number_or_modify_tasks(env,seed):
 
 def test_general_chat_cannot_execute_model_actions(env,seed):
     e,s,c,*_=env;e.model.result={'actions':[{'op':'update','task_id':seed['id'],'status':'completed','evidence_lines':[1]}]}
-    e.reply('general','alen','Что ты умеешь?',channel='bot')
+    e.reply('general','alen','Хочу общаться с тобой о работе',channel='bot')
     with pytest.raises(ValueError,match='cannot modify'):e.process('general')
     assert e.tasks()[0]['status']=='confirmed'
 

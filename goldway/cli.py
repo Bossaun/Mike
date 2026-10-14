@@ -36,6 +36,18 @@ def pending(e, updates=None, should_stop=lambda:False):
 
 
 def run(e, run_seconds=None):
+    if 'controlled_intake' in e.c:
+        # Validate even when callers constructed Engine without config.load.
+        from .config import load
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.json') as f:
+            json.dump(e.c,f);f.flush();load(f.name)
+        if run_seconds is None or not 0<run_seconds<=300:
+            raise ValueError('Controlled intake requires explicit --run-seconds <=300')
+        remaining=e.c['controlled_intake']['ends_at']-e.now()
+        if remaining<=0:
+            raise ValueError('Controlled intake window expired')
+        run_seconds=min(run_seconds,remaining)
     e.c['availability']='test_window' if run_seconds is not None else 'running_worker'
     # Only one worker may send from a database. Lock lives beside persistent DB.
     token=os.environ.get('TELEGRAM_BOT_TOKEN')
