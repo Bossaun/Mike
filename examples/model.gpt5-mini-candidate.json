@@ -1,0 +1,10 @@
+{
+  "model": {
+    "provider": "openai",
+    "model": "gpt-5-mini",
+    "api": "chat_completions",
+    "max_output_tokens": 6000,
+    "input_per_million": 0.25,
+    "output_per_million": 2.0
+  }
+}

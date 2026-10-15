@@ -3,6 +3,31 @@
 Checkpoint: 2026-10-15. This document describes the release and recorded evidence,
 not a live health signal. Verify the exact deployed revision separately.
 
+## Follow-up quality release C05-F1
+
+Actual provider probes found that a JSON history snapshot and a stale copied
+topic were insufficient: gpt-4.1-mini still repeated its offer after 'Давай'.
+The new provider adapter sends the bounded authorized local conversation as
+real user/assistant roles, with one final structured current request and no
+duplicate history. OpenAI Chat, Anthropic and optional Responses share validation
+and history-aware context/budget limits. No remote stored history is fetched.
+Short continuations are anchored to the actual latest delivered answer; stale
+entity lists cannot silently force a wrong brand. Missing ordinal support asks
+for clarification. Current-message task evidence and permission guards remain.
+
+Integrated checks:1728passed7.08s. After the final state/partial-retrieval prompt
+clarification,288affectedcasespassed2.54s; these overlap. Independent review found
+and verified two corrected stale-entity defects. Provider comparison on public
+data with synthetic in-memory chats showed better offer follow-through from
+gpt-4.1 and gpt-5-mini than gpt-4.1-mini; that is not Telegram acceptance.
+See knowledge/C05_FOLLOWUP_VALIDATION.md for scope and remaining decisions.
+
+The optional examples/model.gpt5-mini-candidate.json is an overlay requiring an
+explicit model decision, not an activated runtime profile. It preserves the
+existing daily budget/context policy when merged; there is no automatic model
+switch. No live model, recipient, group, source policy or bot-worker flag changes
+are included in this follow-up release.
+
 ## Current approved runtime
 
 The existing closed five-person TEAM_ONLY worker is authorized permanently.
