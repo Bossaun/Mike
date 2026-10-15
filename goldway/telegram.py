@@ -91,7 +91,7 @@ class Dispatcher:
             if should_stop():break
             try:
                 from .intelligence import delivery_permitted
-                if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now()):
+                if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
                     raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
                 route,transport=self.route(row['recipient'],row['preferred_transport'])
                 with self.s.transaction():

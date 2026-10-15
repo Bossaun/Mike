@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from .dialogue import DialogueMemory, scope_from_payload
 from .knowledge import KnowledgeIndex
 from .knowledge_sources import ReadOnlySources
+from .work_context import (collect_work_context, is_operational_query,
+                           readable_work_ids, validate_work_snapshot)
 
 
 def reader_key(business, sender):
@@ -15,6 +17,14 @@ def reader_key(business, sender):
 
 def intelligence_enabled(config):
     return isinstance(config.get('intelligence'), dict) and config['intelligence'].get('enabled') is True
+
+
+def readable_evidence_ids(store, config, sender, now):
+    """Current source grants AND task-role grants; never a roster-wide task grant."""
+    if sender not in set(config.get('employees', {})) | set(config.get('admins', [])):
+        return set()
+    docs = KnowledgeIndex(store).allowed_ids(reader_key(config['business'], sender), now=now)
+    return docs | readable_work_ids(store, config, sender, docs)
 
 
 class Intelligence:
@@ -62,10 +72,13 @@ class Intelligence:
         return set(json.loads(row[0])) if row else set()
 
     def task_permitted(self, task_id, sender, now):
-        return self.task_refs(task_id) <= self.index.allowed_ids(self.reader(sender), now=now)
+        return self.task_refs(task_id) <= self.readable_ids(sender, now)
+
+    def readable_ids(self, sender, now):
+        return readable_evidence_ids(self.s, self.c, sender, now)
 
     def visible_tasks(self, tasks, sender, now):
-        allowed = self.index.allowed_ids(self.reader(sender), now=now)
+        allowed = self.readable_ids(sender, now)
         return [t for t in tasks if self.task_refs(t['id']) <= allowed]
 
     def protect_outbox(self, outbox_id, evidence_ids):
@@ -78,13 +91,20 @@ class Intelligence:
 
     def enrich(self, payload, context, now):
         self.sources.refresh(now=now)
-        allowed = self.index.allowed_ids(self.reader(payload['sender']), now=now)
+        allowed = self.readable_ids(payload['sender'], now)
+        memory_allowed = allowed
+        if self._independent_task_request(payload, context):
+            # An earlier multi-person overview is not evidence for an unrelated
+            # new assignment. Exclude its CONTENT and state before the model,
+            # rather than dropping confidentiality refs after the model saw it.
+            memory_allowed = {ref for ref in allowed if not ref.startswith('work-task:')}
         scope = scope_from_payload(payload, self.b)
-        dialogue = self.memory.get(scope, readable_ids=allowed, now=now, include_evidence=True) if scope else {
+        dialogue = self.memory.get(scope, readable_ids=memory_allowed, now=now, include_evidence=True) if scope else {
             'turns': [], 'topic': '', 'entities': [], 'pending_offer': None, 'task_id': None}
         # Internal event summaries are neither delivered conversation nor chat scoped.
         context['recent_summaries'] = []
         context['dialogue_evidence_ids'] = dialogue.pop('_evidence_ids', [])
+        last_context_kind = dialogue.pop('_last_context_kind', None)
         if len(context['dialogue_evidence_ids']) > 12:
             dialogue = {'turns': [], 'topic': '', 'entities': [], 'pending_offer': None, 'task_id': None}
             context['dialogue_evidence_ids'] = []
@@ -126,6 +146,14 @@ class Intelligence:
                 subjects = []
         context['knowledge'] = self.index.search(query, self.reader(payload['sender']), now=now,
                                                 limit=5, max_chars=self.knowledge_chars, subjects=subjects)
+        # Documents and current task records are different sources. A read-only
+        # business question must not be limited to the public product catalog or
+        # accidentally acquire mutation authority from an operational snapshot.
+        context.pop('work_context', None)
+        operational_question = is_operational_query(payload['text'])
+        if operational_question or (followup and last_context_kind == 'work'):
+            context['work_context'] = collect_work_context(
+                self.s, self.c, payload['sender'], allowed, now, payload['text'])
         # Focus helps resolve a short continuation; existing task permission/evidence
         # checks still decide every mutation. No hidden imported task is introduced.
         focus = dialogue['task_id']
@@ -140,24 +168,43 @@ class Intelligence:
             else:
                 dialogue['task_id'] = None
         task_refs = set().union(*(self.task_refs(t['id']) for t in context.get('tasks', [])))
-        refs = set(self.evidence(context['knowledge'])) | set(context['dialogue_evidence_ids']) | task_refs
+        refs = set(self.evidence(context['knowledge'], context.get('work_context'))) | set(context['dialogue_evidence_ids']) | task_refs
         if len(refs) > 16:
             # Never truncate provenance while retaining its protected content.
             context.pop('followup', None)
             context['dialogue'] = {'turns': [], 'topic': '', 'entities': [], 'pending_offer': None, 'task_id': None}
             context['dialogue_evidence_ids'] = []
             context['knowledge'] = {'evidence': [], 'facts': [], 'conflicts': [], 'status': 'no_evidence'}
+            # Retain the bounded current work projection for every collected
+            # route, including short follow-ups: trimming older context must
+            # never turn a read-only explanation into an action-capable route.
             kept, task_refs = [], set()
+            current_refs = set(self.evidence(context['knowledge'], context.get('work_context')))
             for task in context.get('tasks', []):
                 candidate = task_refs | self.task_refs(task['id'])
-                if len(candidate) <= 16:
+                if len(candidate | current_refs) <= 16:
                     kept.append(task); task_refs = candidate
             context['tasks'] = kept
         context['task_evidence_ids'] = sorted(task_refs)
         return scope
 
     @staticmethod
-    def evidence(knowledge):
+    def _independent_task_request(payload, context):
+        text = payload['text']
+        if context.get('kind') != 'operator_chat' or is_operational_query(text):
+            return False
+        explicit_task = (payload.get('task_id')
+                         or re.search(r'(?:№|#|задач[ауеи]?\s*)\s*\d+', text, re.I)
+                         or any(t.get('title') and t['title'].casefold() in text.casefold()
+                                for t in context.get('tasks', [])))
+        creation = re.search(
+            r'\b(?:созда[йт]\w*|постав[ьи]\w*|запиш\w*|добав[ьи]\w*|зафиксир\w*)\s+'
+            r'(?:(?:новую|тестовую|мне|нам|пожалуйста)\s+)*(?:задач\w*|поручени\w*|иде[юя])\b'
+            r'|^\s*(?:новая\s+)?задача\s*:', text, re.I)
+        return bool(explicit_task or creation)
+
+    @staticmethod
+    def evidence(knowledge, work_context=None):
         found = {}
         for item in knowledge.get('evidence', []): found[item['id']] = item
         for fact in knowledge.get('facts', []):
@@ -165,6 +212,8 @@ class Intelligence:
         for conflict in knowledge.get('conflicts', []):
             for item in conflict.get('values', []):
                 if 'evidence_id' in item: found.setdefault(item['evidence_id'], item)
+        for item in (work_context or {}).get('evidence', []):
+            found[item['id']] = item
         return found
 
     def validate(self, result, context, payload, now):
@@ -176,20 +225,35 @@ class Intelligence:
         if state['task_id'] not in {None, *(t['id'] for t in context.get('tasks', []))}:
             raise ValueError('Unpermitted dialogue task focus')
         mode, refs = result.get('knowledge_mode'), result.get('evidence_ids')
-        evidence = self.evidence(context['knowledge'])
+        evidence = self.evidence(context['knowledge'], context.get('work_context'))
         if (mode not in ('grounded','conflict','not_found','not_needed')
                 or not isinstance(refs, list) or len(refs) > 12
                 or any(not isinstance(v, str) or v not in evidence for v in refs)):
             raise ValueError('Invalid knowledge citations')
         all_refs = set(evidence) | set(context.get('dialogue_evidence_ids', [])) | set(context.get('task_evidence_ids', []))
-        if all_refs and not all_refs <= self.index.allowed_ids(self.reader(payload['sender']), now=now):
+        readable = self.readable_ids(payload['sender'], now)
+        if all_refs and not all_refs <= readable:
             raise ValueError('Knowledge permission expired before reply')
+        for item in context.get('work_context', {}).get('evidence', []):
+            if not validate_work_snapshot(self.s, self.c, payload['sender'], readable, item):
+                raise ValueError('Work evidence changed before reply')
         if mode in ('grounded','conflict') and not refs:
             raise ValueError('Grounded answer requires evidence')
         if mode in ('grounded','conflict') and any(not evidence[ref].get('confirmed') for ref in refs):
             raise ValueError('Assumptions cannot ground corporate facts')
         if mode in ('not_found','not_needed') and refs:
             raise ValueError('Ungrounded answer cannot cite evidence')
+        work = context.get('work_context')
+        if work and result.get('actions'):
+            # This is an explicitly read-only question/explanation route. A
+            # misclassified model result cannot turn it into a mutation.
+            refs = [item['id'] for item in work.get('evidence', [])]
+            result = dict(result, actions=[], intent='conversation',
+                          summary='Дан обзор записей задач без изменений.',
+                          reply_text=self._work_fallback(work) if refs else '',
+                          evidence_ids=refs, knowledge_mode='grounded' if refs else 'not_found')
+            state = dict(state, pending_offer=None)
+            mode = result['knowledge_mode']
         pending = context['dialogue']['pending_offer']
         short = re.fullmatch(r'\s*(?:да|давай|давайте|можно|хорошо|ок(?:ей)?)\s*[.!]?\s*', payload['text'], re.I)
         if pending and pending['kind'] != 'confirm_task' and short and result.get('actions'):
@@ -200,18 +264,37 @@ class Intelligence:
             raise ValueError('Reminder request cannot silently change an assignment')
         result = dict(result, dialogue_state=state)
         if mode == 'not_found' and not result.get('actions'):
-            # A missing source is a concrete limitation, never permission to invent.
-            result['reply_text'] = ('В доступных вам источниках нет подтверждённых сведений по этому вопросу. '
-                                    'Пришлите подходящий документ или уточните, у кого можно проверить.')
+            # Preserve the no-invention guard, but explain the actual source
+            # boundary or show recorded work rather than a generic dead end.
+            if work and work.get('evidence'):
+                result['reply_text'] = self._work_fallback(work)
+                refs = [item['id'] for item in work['evidence']]
+                result.update(evidence_ids=refs, knowledge_mode='grounded')
+            elif work:
+                result['reply_text'] = (
+                    'Подтверждённого обзора проблем бизнеса у меня пока нет. '
+                    'В доступных мне рабочих задачах нет записей для такого обзора; '
+                    'это не означает, что проблем нет. Публичный каталог описывает ассортимент, '
+                    'а не внутреннюю работу. Пришлите свежие итоги планёрки с проблемами и решениями '
+                    '— разберу их и покажу поручения на согласование.')
+            else:
+                result['reply_text'] = (
+                    'В доступных вам источниках нет подтверждённых сведений по этому вопросу. '
+                    'Могу опираться на подключённые документы и доступные рабочие задачи; '
+                    'чтобы ответить конкретно, пришлите актуальную справку по этой теме.')
         if mode == 'conflict' and any(c.get('resolution') == 'unresolved' for c in context['knowledge'].get('conflicts', [])):
             result['reply_text'] = 'Источники противоречат друг другу; единого подтверждённого ответа пока нет.\n' + result.get('reply_text', '')
         if refs:
             footers = []
             for ref in dict.fromkeys(refs):
                 item = evidence[ref]
-                date = item.get('updated_at') or 'дата обновления не указана'
-                seen = datetime.fromtimestamp(item['observed_at'], timezone.utc).strftime('%Y-%m-%d')
-                label = f"{item['title']} — {item['url']} (обновление: {date}; проверено: {seen})"
+                seen = datetime.fromtimestamp(item['observed_at'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+                if item.get('source_kind') == 'task':
+                    label = f"Реестр задач Mike: №{item['public_number']} (состояние на {seen})"
+                else:
+                    date = item.get('updated_at') or 'дата обновления не указана'
+                    seen = seen.split(' ')[0]
+                    label = f"{item['title']} — {item['url']} (обновление: {date}; проверено: {seen})"
                 if label not in footers: footers.append(label)
             body = result.get('reply_text', '')
             # Reserve space for authentic citations; URLs cannot be invented by model.
@@ -220,9 +303,26 @@ class Intelligence:
             result['reply_text'] = body[:3000-len(footer)] + footer
         return result
 
+    @staticmethod
+    def _work_fallback(work):
+        labels = {'proposed': 'черновик', 'confirmed': 'согласовано',
+                  'in_progress': 'в работе', 'blocked': 'есть препятствие'}
+        lines = ['По доступным записям задач вижу следующие рабочие пункты:']
+        for item in work['evidence']:
+            line = f"• №{item['public_number']} {item['title']} — {labels.get(item['status'], item['status'])}"
+            if item.get('deadline'): line += f"; срок {item['deadline']}"
+            else: line += '; срок не указан'
+            if not item.get('owner'): line += '; ответственный не указан'
+            if item['status'] == 'blocked' and item.get('next_step'):
+                line += f". Записанный следующий шаг: {item['next_step']}"
+            lines.append(line)
+        lines.append('Это выборка состояния задач, а не полный диагноз бизнеса; '
+                     'фактические причины и результаты нужно подтверждать.')
+        return '\n'.join(lines)
+
     def remember(self, event_id, payload, context, result, scope, first_outbox_id, changed, now):
         rows = self.s.rows('SELECT * FROM outbox WHERE business=? AND id>? ORDER BY id', (self.b, first_outbox_id))
-        evidence_ids = sorted(set(self.evidence(context['knowledge'])) | set(context.get('dialogue_evidence_ids', [])) | set(context.get('task_evidence_ids', [])))
+        evidence_ids = sorted(set(self.evidence(context['knowledge'], context.get('work_context'))) | set(context.get('dialogue_evidence_ids', [])) | set(context.get('task_evidence_ids', [])))
         if len(evidence_ids) > 16: raise ValueError('Knowledge provenance budget exceeded')
         # Provenance survives later updates/reminders/summary and permission changes.
         for task_id in set(changed) - context.get('restricted_proposal_ids', set()):
@@ -244,10 +344,11 @@ class Intelligence:
                              (task['owner']==payload['sender'] and task['status']!='proposed')):
                     state['task_id'] = task_id
             self.memory.record(scope, event_id, payload['text'], '\n\n'.join(r['text'] for r in own),
-                               state=state, evidence_ids=evidence_ids, at=now, outbox_ids=[r['id'] for r in own])
+                               state=state, evidence_ids=evidence_ids, at=now, outbox_ids=[r['id'] for r in own],
+                               context_kind='work' if context.get('work_context') else None)
 
 
-def delivery_permitted(store, business, recipient, outbox_id, now):
+def delivery_permitted(store, business, recipient, outbox_id, now, config=None):
     """Recheck citations immediately before transport; unrelated old output unchanged."""
     tables = {r[0] for r in store.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('intelligence_outbox_acl','intelligence_task_acl')")}
     if not tables: return True
@@ -267,6 +368,13 @@ def delivery_permitted(store, business, recipient, outbox_id, now):
                 values = json.loads(row[0])
                 if not isinstance(values,list) or any(not isinstance(v,str) for v in values): return False
                 refs.update(values)
-        return not refs or refs <= KnowledgeIndex(store).allowed_ids(reader_key(business, recipient), now=now)
+        if not refs:
+            return True
+        if config is not None:
+            return (config.get('business') == business
+                    and refs <= readable_evidence_ids(store, config, recipient, now))
+        # Existing callers without a profile can validate document grants only;
+        # they cannot authorize new task-role evidence without current roles.
+        return refs <= KnowledgeIndex(store).allowed_ids(reader_key(business, recipient), now=now)
     except (ValueError, TypeError):
         return False

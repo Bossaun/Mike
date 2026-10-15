@@ -12,7 +12,37 @@ from datetime import date, datetime, timedelta
 _ISO = re.compile(r"(?<![\w])\d{4}-\d{2}-\d{2}(?![\w])")
 _DMY = re.compile(r"(?<![\w])\d{2}\.\d{2}\.\d{4}(?![\w])")
 _RELATIVE = re.compile(r"\b(сегодня|завтра|послезавтра)\b")
-_IN_DAYS = re.compile(r"\bчерез\s+([+-]?\d+)\s+(день|дня|дней)\b")
+_DAY_UNIT = r"(?:день|дня|дней)"
+_CALENDAR_DAYS = rf"(?:календарн(?:ый|ых|ого)\s+)?{_DAY_UNIT}"
+_IN_DAYS = re.compile(rf"\bчерез\s+([+-]?\d+)\s+{_CALENDAR_DAYS}\b")
+_EXPLICIT_DAYS = re.compile(
+    rf"\b(?:срок(?:\s+(?:выполнения|исполнения))?|в\s+течение)\b"
+    rf"\s*(?:[:=—–]\s*)?([+-]?\d+)\s+{_CALENDAR_DAYS}\b"
+)
+_DURATION_UNIT = (
+    r"(?:день|дня|дней|недел[а-яё]*|месяц[а-яё]*|год[а-яё]*|"
+    r"сутк[а-яё]*|час[а-яё]*)"
+)
+_EXPLICIT_DURATION = re.compile(
+    rf"\b(?:срок|в\s+течение)\b[^!?;]{{0,80}}\b{_DURATION_UNIT}\b"
+)
+_DURATION_QUALIFIER = re.compile(
+    r"\b(?:не|нет|минимум|максимум|рабоч[а-яё]*|будн[а-яё]*|отмен[а-яё]*)\b"
+)
+_OTHER_ANCHOR = re.compile(
+    r"\s*(?:[,—–]\s*)?(?:с|со|от|до|после|начиная|считая|отсчитывая|отсч[её]т)\b"
+)
+_ALTERNATE_START = re.compile(
+    r"\b(?:отсч[её]т[а-яё]*|отсчит[а-яё]*|отсчитыв[а-яё]*|начиная|"
+    r"считая|считать|считайте)\b|"
+    r"\bначал[а-яё]*\s+срок[а-яё]*\b|"
+    r"\b(?:с|со|от|до)\s+(?:\d|(?:[а-яё]+\s+){0,3}"
+    r"(?:дат[а-яё]*|момент[а-яё]*|день|дня|начал[а-яё]*|окончан[а-яё]*|"
+    r"получен[а-яё]*|поступлен[а-яё]*|подписан[а-яё]*|оплат[а-яё]*|"
+    r"поставк[а-яё]*|заказ[а-яё]*|отгрузк[а-яё]*|согласован[а-яё]*|"
+    r"сегодня|завтра|послезавтра)\b)"
+)
+_INCOMPLETE_ALTERNATIVE = re.compile(r"\b(?:или|либо)\s+[\w+-]")
 _WEEKDAY = re.compile(
     r"\b(?:понедельник[а-яё]*|вторник[а-яё]*|сред[ауеы][а-яё]*|"
     r"четверг[а-яё]*|пятниц[а-яё]*|суббот[а-яё]*|воскресень[а-яё]*|"
@@ -41,13 +71,28 @@ _UNSUPPORTED_DURATION = re.compile(
 )
 
 
+def is_relative_deadline(text: str) -> bool:
+    """Identify source-date-dependent evidence, including invalid durations.
+
+    This signal does not confirm a deadline. Callers without a known original
+    message date must also reject uncertain or unsupported relative phrases.
+    """
+    if not isinstance(text, str):
+        raise TypeError("Deadline evidence must be text")
+    value = " ".join(text.casefold().split())
+    return bool(_RELATIVE.search(value) or re.search(r"\b(?:через|спустя)\b", value)
+                or _EXPLICIT_DURATION.search(value))
+
+
 def resolve_deadline(text: str, reference: datetime) -> str | None:
     """Return one confirmed ISO date, or ``None`` when clarification is needed.
 
     Relative words use ``reference.date()`` in its supplied time zone. A naive
     reference is a caller error and raises ``ValueError``; no host time zone or
     current clock is consulted. Only full YYYY-MM-DD/DD.MM.YYYY dates and
-    today/tomorrow/day-after-tomorrow/``через N дней`` (1..365) are supported.
+    today/tomorrow/day-after-tomorrow and explicit calendar-day durations
+    (``через N дней``, ``срок N дней``, ``в течение N дней``, 1..365) are supported.
+    Durations start on the original message date supplied by the caller.
     """
     if not isinstance(reference, datetime) or reference.utcoffset() is None:
         raise ValueError("Deadline reference must be a timezone-aware datetime")
@@ -79,17 +124,40 @@ def resolve_deadline(text: str, reference: datetime) -> str | None:
         for match in _RELATIVE.finditer(value):
             offset = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[match.group(1)]
             candidates.add(reference.date() + timedelta(days=offset))
-        for match in _IN_DAYS.finditer(value):
+        durations = [*_IN_DAYS.finditer(value), *_EXPLICIT_DAYS.finditer(value)]
+        # The source message date is the only supported starting point. Inspect
+        # the whole citation: another start may precede the duration or appear
+        # in parentheses/a later sentence.
+        if durations and _ALTERNATE_START.search(value):
+            return None
+        for match in durations:
             number = match.group(1)
             if not number.isdecimal() or len(number) > 3 or not 1 <= int(number) <= 365:
+                return None
+            if _OTHER_ANCHOR.match(value[match.end():]):
                 return None
             candidates.add(reference.date() + timedelta(days=int(number)))
     except (ValueError, OverflowError):
         return None
 
     # Recognise an unsupported duration as ambiguity, even alongside a date.
-    if _UNSUPPORTED_DURATION.search(_IN_DAYS.sub(" ", value)):
+    duration_remainder = _EXPLICIT_DAYS.sub(" ", _IN_DAYS.sub(" ", value))
+    if (_UNSUPPORTED_DURATION.search(duration_remainder)
+            or _EXPLICIT_DURATION.search(duration_remainder)
+            or re.search(rf"\b{_DURATION_UNIT}\b", duration_remainder)):
         return None
+    if durations or _EXPLICIT_DURATION.search(value):
+        # An unparsed second duration or a qualified/negated duration is not a
+        # confirmed count of calendar days. A reminder's "не забудь" is benign.
+        assertion = re.sub(r"\bне\s+забуд(?:ь|ьте)\b", "", value)
+        if _DURATION_QUALIFIER.search(assertion):
+            return None
+        # Full dates and supported durations have already supplied candidates.
+        # A remaining alternative such as "или 3" is still ambiguous even when
+        # its author omitted the repeated day unit.
+        unparsed = _EXPLICIT_DAYS.sub(" ", _IN_DAYS.sub(" ", remaining))
+        if _INCOMPLETE_ALTERNATIVE.search(unparsed):
+            return None
     if len(candidates) != 1:
         return None
     return next(iter(candidates)).isoformat()

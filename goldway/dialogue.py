@@ -216,7 +216,7 @@ class DialogueMemory:
         return True
 
     def record(self, scope, event_id, user_text, assistant_text, *, state=None,
-               evidence_ids=(), at, outbox_ids=()):
+               evidence_ids=(), at, outbox_ids=(), context_kind=None):
         if _scope_parts(scope) is None:
             return False
         if (not _label(event_id, 256) or not _timestamp(at)
@@ -229,6 +229,8 @@ class DialogueMemory:
         if (not isinstance(outbox_ids, (tuple, list, set, frozenset))
                 or len(outbox_ids) > 16 or any(type(v) is not int or v <= 0 for v in outbox_ids)):
             raise ValueError("Invalid dialogue outbox IDs")
+        if context_kind not in (None, 'work'):
+            raise ValueError('Invalid dialogue context kind')
         validated_state = self._state(state)
         receipt = "dialogue:receipt:v1:" + hashlib.sha256(_dump([scope, event_id]).encode()).hexdigest()
         with self._transaction():
@@ -240,6 +242,8 @@ class DialogueMemory:
                      "user": _clip(user_text, self.max_chars), "assistant": _clip(assistant_text, self.max_chars),
                      "state": validated_state, "evidence_ids": sorted(set(evidence_ids)),
                      "outbox_ids": sorted(set(outbox_ids))}
+            if context_kind:
+                entry['context_kind'] = context_kind
             category = "pending" if entry["outbox_ids"] else "confirmed"
             doc[category] = self._bounded(doc[category] + [entry])
             if category == "confirmed" and validated_state is not None:
@@ -300,4 +304,6 @@ class DialogueMemory:
                 references = {ref for entry in entries for ref in entry['evidence_ids']}
                 if checkpoint and visible(checkpoint): references.update(checkpoint['evidence_ids'])
                 result['_evidence_ids'] = sorted(references)
+                if entries and result['turns'] and entries[-1].get('context_kind') == 'work':
+                    result['_last_context_kind'] = 'work'
             return result

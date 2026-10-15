@@ -3,6 +3,35 @@
 Checkpoint: 2026-10-15. This document describes the release and recorded evidence,
 not a live health signal. Verify the exact deployed revision separately.
 
+## Operational knowledge correction C05-F2
+
+Business-problem questions now retrieve a bounded snapshot of current permitted
+task records alongside the registered documents. Blocked work, overdue dates,
+missing owners and dates are recorded signals, not an independently verified
+diagnosis of GOLDWAY. Employees see their own non-draft work; administrators use
+their existing role. Source revocation, dependency permissions and current roles
+are rechecked before generation and delivery. No old conversations are imported.
+
+This operational route is read-only even if the model proposes an action. A
+missing document no longer erases available work evidence behind a generic
+response. With no work evidence Mike explains the specific limit and requests a
+current meeting summary. Independent task requests exclude earlier work-tainted
+conversation before generation, preserving the new task's intended permissions.
+
+Explicit calendar durations such as `Срок 2 дня` use the original source-message
+date. Unknown dates, workdays, uncertain/alternative starting events still need
+clarification. Deadline-only replies do not cancel an agreed-time check-back.
+The screenshot's earlier generic processing error was NOT reproduced by the old
+parser; its server-side cause still requires actual error evidence.
+
+Final suite:1927passed7.23s. Focused affected suites329passed2.13s overlap the
+full run. Independent review findings were corrected, including the provenance
+budget boundary for a short work follow-up. A finite actual gpt-4.1-mini probe
+answered a work question, shortened it and cited task records with fictional
+data/in-memory capture; it did not use Telegram or prove a deployed staff flow.
+No model, budget, recipients, worker or external-source configuration is changed.
+See knowledge/C05_WORK_CONTEXT_VALIDATION.md for evidence and limits.
+
 ## Follow-up quality release C05-F1
 
 Actual provider probes found that a JSON history snapshot and a stale copied
