@@ -1,0 +1,25 @@
+{
+  "intelligence": {
+    "enabled": true,
+    "refresh_seconds": 900,
+    "history_messages": 8,
+    "history_chars": 6000,
+    "knowledge_chars": 7000,
+    "sources": [
+      {
+        "id": "goldway-public-site",
+        "kind": "website",
+        "url": "https://goldwaybaltic.com",
+        "title": "GOLDWAY — официальный публичный сайт",
+        "readers": ["test_operator", "frost", "alen", "nastya", "dasha_it"]
+      },
+      {
+        "id": "goldway-public-catalog",
+        "kind": "public_catalog",
+        "url": "https://gw-api.abdulwaheedaziz8.workers.dev?api=catalog",
+        "readers": ["test_operator", "frost", "alen", "nastya", "dasha_it"]
+      }
+    ]
+  },
+  "scheduling": {"enabled": true}
+}

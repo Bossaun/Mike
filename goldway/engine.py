@@ -24,7 +24,99 @@ class Engine:
     def __init__(self, store, config, model, now=time.time):
         self.s, self.c, self.model, self.now = store, config, model, now
         self.b = config['business']
+        from .intelligence import Intelligence, intelligence_enabled
+        self.intelligence = Intelligence(store, config) if intelligence_enabled(config) else None
         self.tz = ZoneInfo(config.get('timezone','Europe/Moscow'))
+        self.scheduler = None
+        if isinstance(config.get('scheduling'), dict) and config['scheduling'].get('enabled') is True:
+            from .scheduling import Scheduler
+            self.scheduler = Scheduler(store, config, now=now, permitted=self._scheduling_permitted,
+                                       spawn=self._spawn_recurring)
+
+    def _scheduling_permitted(self, task_id, recipient, at):
+        task = self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?', (self.b, task_id)).fetchone()
+        if not task or recipient not in self.c['employees']:
+            return False
+        if recipient not in self.c['admins'] and task['owner'] != recipient:
+            return False
+        if self.intelligence:
+            return self.intelligence.task_permitted(task_id, recipient, at)
+        # Previously protected tasks stay protected if knowledge intake is disabled.
+        exists = self.s.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='intelligence_task_acl'").fetchone()
+        if exists:
+            row = self.s.execute('SELECT evidence_ids FROM intelligence_task_acl WHERE business=? AND task_id=?', (self.b, task_id)).fetchone()
+            if row:
+                try:
+                    from .intelligence import reader_key
+                    from .knowledge import KnowledgeIndex
+                    refs = json.loads(row[0])
+                    return (isinstance(refs, list) and all(isinstance(v, str) for v in refs)
+                            and set(refs) <= KnowledgeIndex(self.s).allowed_ids(reader_key(self.b, recipient), now=at))
+                except (ValueError, TypeError):
+                    return False
+        return True
+
+    def _spawn_recurring(self, template_task_id, occurrence_key, due_at):
+        template = self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?', (self.b, template_task_id)).fetchone()
+        if not template or not self._scheduling_permitted(template_task_id, template['owner'], self.now()):
+            raise ValueError('Recurring template is unavailable')
+        series_id = occurrence_key.rsplit(':', 1)[0]
+        series = self.s.execute('SELECT snapshot FROM c07_series WHERE business=? AND id=? AND task_id=?',
+                                (self.b, series_id, template_task_id)).fetchone()
+        if not series:
+            raise ValueError('Recurring authorization is unavailable')
+        # A completion report is not the instruction/evidence for the next period.
+        template = json.loads(series['snapshot'])
+        task_id = 'recurring:' + hashlib.sha256((self.b + ':' + occurrence_key).encode()).hexdigest()
+        if self.s.execute('SELECT id FROM tasks WHERE business=? AND id=?', (self.b, task_id)).fetchone():
+            return task_id
+        deadline = datetime.fromtimestamp(due_at, self.tz).date().isoformat()
+        self.s.execute('''INSERT INTO tasks(business,id,title,owner,deadline,next_step,criterion,status,source_id,evidence,created)
+            VALUES(?,?,?,?,?,?,?,'confirmed',?,?,?)''',
+            (self.b, task_id, template['title'], template['owner'], deadline, template['next_step'],
+             template['criterion'], template['source_id'], template['evidence'], self.now()))
+        for source_id in template['source_ids']:
+            self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)', (self.b, task_id, source_id))
+        if self.s.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='intelligence_task_acl'").fetchone():
+            self.s.execute('INSERT OR IGNORE INTO intelligence_task_acl SELECT business,?,evidence_ids FROM intelligence_task_acl WHERE business=? AND task_id=?', (task_id, self.b, template_task_id))
+        from .presentation import task_card
+        task = dict(self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?', (self.b, task_id)).fetchone())
+        self.s.queue(self.b, template['owner'], 'Регулярное поручение\n\n' + task_card(task, self.c),
+                     'assignment:recurring:' + occurrence_key, self.now(), task_id, parse_mode='HTML')
+        self.s.audit(self.b, 'recurring_task_created', {'template': template_task_id, 'task': task_id, 'occurrence': occurrence_key}, self.now())
+        return task_id
+
+    def _recurrence_after_actions(self, payload, context, changed, event_id):
+        if not self.scheduler:
+            return
+        from .scheduling_dialogue import recurrence_request
+        rule = recurrence_request(self, payload)
+        if rule and len(set(changed)) == 1 and any(a.get('op') == 'create' for a in context.get('scheduling_actions', [])):
+            task_id = changed[0]
+            value = {'rule': rule, 'sender': payload['sender']}
+            self.s.execute('INSERT INTO runtime(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           (f'recurrence-proposal:{self.b}:{task_id}', json.dumps(value)))
+        for task_id in set(changed):
+            key = f'recurrence-proposal:{self.b}:{task_id}'
+            pending = self.s.execute('SELECT value FROM runtime WHERE key=?', (key,)).fetchone()
+            task = self.s.execute('SELECT status,owner FROM tasks WHERE business=? AND id=?', (self.b, task_id)).fetchone()
+            if pending and task and task['status'] == 'confirmed' and payload['sender'] in self.c['admins']:
+                if not task['owner']:
+                    context.setdefault('owner_questions', []).append('Кто отвечает за регулярное поручение? Повторение пока не включено.')
+                    continue
+                self.scheduler.register_series(task_id, payload['sender'], json.loads(pending[0])['rule'],
+                                               event_id + ':series:' + task_id, self._message_time(payload))
+                self.s.execute('DELETE FROM runtime WHERE key=?', (key,))
+
+    def _recurrence_preview(self, task_id):
+        if not self.scheduler:
+            return ''
+        pending = self.s.execute('SELECT value FROM runtime WHERE key=?', (f'recurrence-proposal:{self.b}:{task_id}',)).fetchone()
+        if not pending:
+            return ''
+        rule = json.loads(pending[0])['rule']
+        days = ', '.join(('пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс')[d] for d in rule['weekdays'])
+        return f'\nПовторение после подтверждения: {days}, {rule["time"]} ({rule["timezone"]}).'
 
     def tasks(self, owner=None):
         sql='SELECT * FROM tasks WHERE business=?'; args=[self.b]
@@ -59,7 +151,10 @@ class Engine:
                 if operator and sender not in self.c['admins']:
                     eligible=len(context['tasks'])==1 and self._employee_progress(payload,context['tasks'][0])
                 if eligible and len(context['tasks'])==1:
-                    self._record_response(context['tasks'][0]['id'],sender,payload['received_at'])
+                    self._record_response(context['tasks'][0]['id'],sender,payload['received_at'],
+                                          progress=(self._employee_progress(payload,context['tasks'][0]) and not
+                                                    re.search(r'\b(?:через|сегодня|завтра|послезавтра|напомни|напоминай)\b|\d{1,2}:\d{2}', text.casefold())),
+                                          message_at=self._message_time(payload))
             return added
 
     def _operator_turn(self,p,kind):
@@ -117,6 +212,7 @@ class Engine:
 
     def _operator_candidates(self,p):
         candidates=self.tasks() if p['sender'] in self.c['admins'] else self.tasks(p['sender'])
+        if self.intelligence:candidates=self.intelligence.visible_tasks(candidates,p['sender'],self.now())
         references=self.reference_ids(p['text'])
         if p.get('task_id'):
             candidates=[t for t in candidates if t['id']==p['task_id']]
@@ -129,11 +225,13 @@ class Engine:
         return [{k:t[k] for k in ('id','public_number','title','owner','deadline','next_step','criterion','status','revision')}
                 for t in candidates[:12]]
 
-    def _record_response(self, task_id, sender, received_at):
+    def _record_response(self, task_id, sender, received_at, *, progress=False, message_at=None):
         changed=self.s.execute('UPDATE tasks SET last_reply=MAX(COALESCE(last_reply,0),?) WHERE business=? AND id=? AND owner=?',
                                (received_at,self.b,task_id,sender)).rowcount
         if changed:
-            self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND recipient=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'reminder:%' AND created<=?",
+            if self.scheduler and progress:
+                self.scheduler.progress(task_id, sender, received_at, message_at=message_at)
+            self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND recipient=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'reminder:%' AND dedupe NOT LIKE 'reminder:c07:%' AND created<=?",
                            (self.b,task_id,sender,received_at))
 
     def reference_ids(self,text):
@@ -144,10 +242,16 @@ class Engine:
         from .presentation import meeting_messages
         pages=meeting_messages(tasks,self.c)
         for index,page in enumerate(pages):
-            self.s.queue(self.b,recipient,page,f'review:{key}:{recipient}:page:{index}',self.now(),parse_mode='HTML')
+            dedupe=f'review:{key}:{recipient}:page:{index}'
+            self.s.queue(self.b,recipient,page,dedupe,self.now(),parse_mode='HTML')
+            if self.intelligence:
+                refs=set().union(*(self.intelligence.task_refs(t['id']) for t in tasks))
+                row=self.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?',(self.b,dedupe)).fetchone()
+                if row:self.intelligence.protect_outbox(row['id'],refs)
 
     def _context(self,p,kind):
         allowed=self.tasks() if kind=='transcript' or p['sender'] in self.c['admins'] else self.tasks(p['sender'])
+        if self.intelligence:allowed=self.intelligence.visible_tasks(allowed,p['sender'],self.now())
         if self._closed_team() and p['sender'] not in self.c['admins'] and not (p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())):
             allowed=[t for t in allowed if t['status']!='proposed']
         if p.get('task_id'):
@@ -179,9 +283,10 @@ class Engine:
         if not event or event['state'] in ('done','superseded'): return
         p=json.loads(event['payload']); kind=event['kind']
         try:
+            if self.intelligence:self.intelligence.sources.refresh(self.now())
             context=self._context(p,kind)
             personal_operator=self._task_dialogue_turn(p,kind)
-            general=kind=='reply' and (basic_reply(p['text']) is not None if personal_operator else is_general(p['text']))
+            general=kind=='reply' and not self.intelligence and (basic_reply(p['text']) is not None if personal_operator else is_general(p['text']))
             operator=personal_operator and not general
             if operator:
                 context['kind']='operator_chat'
@@ -202,6 +307,14 @@ class Engine:
                         self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                         self.s.audit(self.b,'duplicate_submission',{'event':event_id,'sender':p['sender']},self.now())
                     return
+            intelligence = self.intelligence if kind=='reply' else None
+            scope = intelligence.enrich(p,context,self.now()) if intelligence else None
+            if self.scheduler and kind == 'reply':
+                context['scheduling_enabled'] = True
+                context.setdefault('capabilities', {})['agreed_time_reminders'] = True
+                from .scheduling_dialogue import handle_scheduling
+                if handle_scheduling(self, event_id, p, context, scope):
+                    return
             explicit_reference=p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())
             explicit_creation=operator and re.search(r'\bсоздай(?:те)?\s+(?:(?:новую|тестовую)\s+)*задачу\b',p['text'].casefold())
             completion_phrase=re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())
@@ -214,13 +327,18 @@ class Engine:
                 if not operator and (general or (kind=='reply' and not context['tasks'])):
                     context['kind']='conversation';context['tasks']=[]
                     visible=self.tasks() if p['sender'] in self.c['admins'] else self.tasks(p['sender'])
+                    if intelligence:visible=intelligence.visible_tasks(visible,p['sender'],self.now())
                     context['task_overview']={status:sum(t['status']==status for t in visible) for status in STATUSES}
                     context['availability']=self.c.get('availability','development')
-                direct=basic_reply(p['text']) if context['kind']=='conversation' else None
+                direct=basic_reply(p['text']) if context['kind']=='conversation' and not intelligence else None
                 result=({'actions':[],'summary':'Объяснены возможности помощника.','reply_text':direct} if direct else self.model.propose(context))
                 if context['kind']=='conversation' and result.get('actions'):
                     raise ValueError('General conversation cannot modify tasks')
                 self.s.audit(self.b,'deterministic_reply' if direct else 'model_proposal',{'event':event_id,'result':result},self.now())
+            if intelligence:
+                if ambiguous and not general:
+                    result.update(dialogue_state={k:v for k,v in context['dialogue'].items() if k!='turns'}, evidence_ids=[], knowledge_mode='not_needed')
+                result=intelligence.validate(result,context,p,self.now())
             actions=result.get('actions')
             if not isinstance(actions,list) or len(actions)>20: raise ValueError('Invalid action list')
             if not isinstance(result.get('summary',''),str): raise ValueError('Invalid summary')
@@ -246,6 +364,7 @@ class Engine:
                 source=p.get('source_id') or event_id
                 self.s.execute('INSERT INTO sources(business,id,body,link) VALUES(?,?,?,?) ON CONFLICT(business,id) DO UPDATE SET body=excluded.body,link=excluded.link',
                                (self.b,source,p['text'],p.get('link',event_id)))
+                first_outbox_id=self.s.execute('SELECT COALESCE(MAX(id),0) FROM outbox').fetchone()[0]
                 changed=[];before={}
                 for a in actions:
                     if operator and self._closed_team() and a.get('op')=='update':
@@ -254,6 +373,9 @@ class Engine:
                     if (proposal_only or ((kind=='transcript' or operator) and self.c.get('review_mode'))) and a.get('op')=='create':
                         a=dict(a,status='proposed')
                     changed.append(self._apply(a,context,source,kind,p))
+                if self.scheduler and kind == 'reply':
+                    context['scheduling_actions'] = actions
+                    self._recurrence_after_actions(p, context, changed, event_id)
                 if kind=='reply' and context['kind']!='conversation':
                     for t in context['tasks']:
                         if operator and not any(a.get('op')=='update' and a.get('task_id')==t['id'] for a in actions):continue
@@ -284,6 +406,7 @@ class Engine:
                         display=dict(self.c,employees=dict(self.c['employees']))
                         if t['owner']==p['sender']:display['employees'][p['sender']]=dict(self.c['employees'][p['sender']],name='Вы')
                         body=task_card(t,display)
+                        body += self._recurrence_preview(id)
                         missing=[]
                         if not t['owner']:missing.append('ответственного')
                         if not t['deadline']:missing.append('срок')
@@ -344,6 +467,8 @@ class Engine:
                     self.s.queue(self.b,p['sender'],'\n'.join(questions),f'field-clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
                 if not actions and kind=='reply' and not meeting_review:
                     self.s.queue(self.b,p['sender'],reply_text or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
+                if intelligence:
+                    intelligence.remember(event_id,p,context,result,scope,first_outbox_id,changed,self.now())
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                 self.s.audit(self.b,'processed',{'event':event_id,'sender':p['sender'],'tasks':changed,'summary':result.get('summary','')[:2000]},self.now())
                 if submission and (changed or result['intent']=='meeting'):
@@ -435,6 +560,8 @@ class Engine:
             # Deterministic exact semantic-title guard. Fuzzy matches remain model suggestions.
             existing=next((t for t in self.tasks() if fingerprint(t['title'])==fingerprint(a['title']) and t['status']!='completed'),None)
             if existing:
+                if self.intelligence and not self.intelligence.task_permitted(existing['id'],p['sender'],self.now()):
+                    raise ClarificationRequired('Task knowledge permission required','Не могу использовать закрытое поручение без подтверждённых прав доступа.')
                 id=existing['id']
                 if employee_proposal and existing['owner']!=p['sender']:
                     context.setdefault('restricted_proposal_ids',set()).add(id)
@@ -495,23 +622,29 @@ class Engine:
         return id
 
     def tick(self):
+        if self.intelligence:self.intelligence.sources.refresh(self.now())
         now=self.now(); interval=self.c.get('reminder_hours',24)*3600
         today=datetime.fromtimestamp(now,self.tz).date().isoformat()
         with self.s.transaction():
+            if self.scheduler:
+                self.scheduler.tick()
             for t in self.tasks():
                 if t['status'] in ('proposed','completed'): continue
+                if self.scheduler and self.scheduler.suppress_generic(t['id']): continue
                 last=max(t['created'],t['last_reply'] or 0,t['last_reminder'] or 0)
                 if now-last<interval: continue
                 overdue=t['deadline'] and t['deadline']<today
                 recipient=t['owner'] or self.c['admins'][0]
+                if self.intelligence and not self.intelligence.task_permitted(t['id'],recipient,now):continue
                 text=f"Задача №{t['public_number']} · {t['title']}: "+('срок прошёл. ' if overdue else '')+'Какой результат? Что мешает и какой следующий шаг?'
                 bucket=int(now//interval)
                 if self.s.queue(self.b,recipient,text,f"reminder:{t['id']}:{bucket}",now,t['id']):
                     self.s.execute('UPDATE tasks SET last_reminder=? WHERE business=? AND id=?',(now,self.b,t['id']))
 
-    def summary(self):
+    def summary(self,recipient=None):
         today=datetime.fromtimestamp(self.now(),self.tz).date().isoformat()
         tasks=self.tasks()
+        if self.intelligence:tasks=self.intelligence.visible_tasks(tasks,recipient or self.c['admins'][0],self.now())
         def lines(items): return ('; '.join(f"№{t['public_number']} {t['title'][:100]}" for t in items[:8]) + (f' (+{len(items)-8})' if len(items)>8 else '')) or 'нет'
         return ('Выполнено: '+lines([t for t in tasks if t['status']=='completed'])+'\nЗадерживается: '+
                 lines([t for t in tasks if t['status']!='completed' and t['deadline'] and t['deadline']<today])+
@@ -520,4 +653,10 @@ class Engine:
     def queue_summary(self, key):
         with self.s.transaction():
             for recipient in ([self.c['meeting_recipient']] if self.c.get('meeting_recipient') else self.c['admins']):
-                self.s.queue(self.b,recipient,self.summary(),f'summary:{key}:{recipient}',self.now())
+                dedupe=f'summary:{key}:{recipient}'
+                self.s.queue(self.b,recipient,self.summary(recipient),dedupe,self.now())
+                if self.intelligence:
+                    tasks=self.intelligence.visible_tasks(self.tasks(),recipient,self.now())
+                    refs=set().union(*(self.intelligence.task_refs(t['id']) for t in tasks))
+                    row=self.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?',(self.b,dedupe)).fetchone()
+                    if row:self.intelligence.protect_outbox(row['id'],refs)

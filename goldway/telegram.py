@@ -90,6 +90,9 @@ class Dispatcher:
         for row in self.s.rows("SELECT * FROM outbox WHERE business=? AND state IN ('pending','retry','blocked') AND next_at<=? ORDER BY id LIMIT 50",(self.b,self.now())):
             if should_stop():break
             try:
+                from .intelligence import delivery_permitted
+                if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now()):
+                    raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
                 route,transport=self.route(row['recipient'],row['preferred_transport'])
                 with self.s.transaction():
                     claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
@@ -214,7 +217,7 @@ class Updates:
                 text=command+(' '+rest[0] if rest else '')
         elif self.c.get('bot_username'):
             text=text.replace('@'+self.c['bot_username'],'').strip()
-        if text.casefold() in ('привет','здравствуйте','добрый день','hello'):
+        if not self.e.intelligence and text.casefold() in ('привет','здравствуйте','добрый день','hello'):
             self.s.queue(b,sender,'Привет! Пишите обычным текстом: задайте вопрос, предложите идею, пришлите планёрку или сообщите результат работы. Если нужно уточнить задачу, назовите её или ответьте на карточку. Команды не нужны.',f"hello:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
         if text=='/start':

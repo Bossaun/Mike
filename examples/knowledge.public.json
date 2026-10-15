@@ -1,0 +1,21 @@
+{
+  "intelligence": {
+    "enabled": true,
+    "refresh_seconds": 900,
+    "sources": [
+      {
+        "id": "goldway-public-site",
+        "kind": "website",
+        "url": "https://goldwaybaltic.com",
+        "title": "GOLDWAY — официальный публичный сайт",
+        "readers": ["REPLACE_WITH_CONFIRMED_MEMBER_KEY"]
+      },
+      {
+        "id": "goldway-public-catalog",
+        "kind": "public_catalog",
+        "url": "https://gw-api.abdulwaheedaziz8.workers.dev?api=catalog",
+        "readers": ["REPLACE_WITH_CONFIRMED_MEMBER_KEY"]
+      }
+    ]
+  }
+}

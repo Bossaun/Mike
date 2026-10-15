@@ -6,6 +6,11 @@ def load(path):
     if c.get('business')!='GOLDWAY': raise ValueError('This pilot only enables GOLDWAY')
     if not c.get('admins') or not c.get('employees'): raise ValueError('Configure employees and admins')
     if any(a not in c['employees'] for a in c['admins']): raise ValueError('Admins need employee identities')
+    if 'scheduling' in c:
+        scheduling = c['scheduling']
+        if (not isinstance(scheduling, dict) or set(scheduling) != {'enabled'}
+                or type(scheduling['enabled']) is not bool):
+            raise ValueError('Scheduling requires an explicit boolean enabled flag')
     ids=[str(v['telegram_user_id']) for v in c['employees'].values() if v.get('telegram_user_id')]
     if len(ids)!=len(set(ids)): raise ValueError('Duplicate Telegram user IDs')
     if c.get('live_send') and (not c.get('recipients_verified') or not os.environ.get('TELEGRAM_BOT_TOKEN')):
