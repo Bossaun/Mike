@@ -47,11 +47,10 @@ class Engine:
             row = self.s.execute('SELECT evidence_ids FROM intelligence_task_acl WHERE business=? AND task_id=?', (self.b, task_id)).fetchone()
             if row:
                 try:
-                    from .intelligence import reader_key
-                    from .knowledge import KnowledgeIndex
+                    from .intelligence import readable_evidence_ids
                     refs = json.loads(row[0])
                     return (isinstance(refs, list) and all(isinstance(v, str) for v in refs)
-                            and set(refs) <= KnowledgeIndex(self.s).allowed_ids(reader_key(self.b, recipient), now=at))
+                            and set(refs) <= readable_evidence_ids(self.s, self.c, recipient, at))
                 except (ValueError, TypeError):
                     return False
         return True
@@ -151,9 +150,11 @@ class Engine:
                 if operator and sender not in self.c['admins']:
                     eligible=len(context['tasks'])==1 and self._employee_progress(payload,context['tasks'][0])
                 if eligible and len(context['tasks'])==1:
+                    from .deadlines import is_relative_deadline
                     self._record_response(context['tasks'][0]['id'],sender,payload['received_at'],
                                           progress=(self._employee_progress(payload,context['tasks'][0]) and not
-                                                    re.search(r'\b(?:через|сегодня|завтра|послезавтра|напомни|напоминай)\b|\d{1,2}:\d{2}', text.casefold())),
+                                                    (is_relative_deadline(text) or
+                                                     re.search(r'\b(?:напомни|напоминай)\b|\d{1,2}:\d{2}', text.casefold()))),
                                           message_at=self._message_time(payload))
             return added
 
@@ -539,9 +540,9 @@ class Engine:
         if operator and a.get('deadline_evidence') and not clear_deadline:
             quote=a['deadline_evidence']
             if 'deadline_evidence' not in cited and quote not in p['text']:raise ValueError('Deadline not grounded in text')
-            from .deadlines import resolve_deadline
+            from .deadlines import is_relative_deadline, resolve_deadline
             resolved=resolve_deadline(quote,datetime.fromtimestamp(self._message_time(p),self.tz))
-            if not context.get('date_reference_known',True) and re.search(r'\b(?:сегодня|завтра|послезавтра|через)\b',quote.casefold()):resolved=None
+            if not context.get('date_reference_known',True) and is_relative_deadline(quote):resolved=None
             if resolved is None and a['op']=='update':
                 a.pop('deadline',None)
                 context.setdefault('deadline_questions',[]).append('Срок не изменён: уточните дату нового срока.')
