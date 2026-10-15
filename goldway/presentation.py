@@ -25,8 +25,9 @@ def meeting_messages(tasks,config):
     unknown=sum(not t.get('owner') for t in tasks);undated=sum(not t.get('deadline') for t in tasks)
     introduction=(f"<b>📋 GOLDWAY · итог планёрки</b>\nПунктов: {len(tasks)} · Без ответственного: {unknown}\n"
                   + ('Точные сроки не названы.' if undated==len(tasks) else (f'Срок нужно уточнить для {undated} задач.' if undated else 'Сроки указаны в карточках.'))
-                  + '\n\nЧерновики — требуется подтверждение руководителя.\n\n')
-    footer='\n\n<b>Как уточнить</b>\nНапишите: «Задача №3: отвечает …, срок …».\nРезультат или препятствие тоже можно сообщить по номеру задачи.'
+                  + ('\n\nЧерновики — требуется подтверждение руководителя.\n\n' if all(t['status']=='proposed' for t in tasks)
+                     else '\n\nСтатус каждого пункта указан в карточке. Черновики требуют подтверждения руководителя.\n\n'))
+    footer='\n\n<b>Как уточнить</b>\nНапишите обычным текстом, кто отвечает и когда будет результат. Назовите задачу или ответьте на её карточку; номер можно использовать по желанию.'
     pages=[];page=introduction;count=0
     for task in tasks:
         card=task_card(task,config)

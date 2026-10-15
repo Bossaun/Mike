@@ -215,10 +215,10 @@ class Updates:
         elif self.c.get('bot_username'):
             text=text.replace('@'+self.c['bot_username'],'').strip()
         if text.casefold() in ('привет','здравствуйте','добрый день','hello'):
-            self.s.queue(b,sender,'Привет! Помогу разобрать планёрку и вести задачи. Пришлите текст или .txt, напишите «сводка» или сообщите результат по номеру задачи.',f"hello:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
+            self.s.queue(b,sender,'Привет! Пишите обычным текстом: задайте вопрос, предложите идею, пришлите планёрку или сообщите результат работы. Если нужно уточнить задачу, назовите её или ответьте на карточку. Команды не нужны.',f"hello:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
         if text=='/start':
-            self.s.queue(b,sender,'GOLDWAY: подключение принято. Пришлите планёрку текстом или .txt; для сводки — /summary. Ответы на задачи можно писать обычным текстом.',f"start:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
+            self.s.queue(b,sender,'Вы подключены к помощнику GOLDWAY. Можно общаться обычным текстом, прислать идею или планёрку. Например: «Как идут наши задачи?» или «Есть идея улучшить упаковку». Команды не нужны.',f"start:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
         source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
         if kind.startswith('edited'):
@@ -233,7 +233,7 @@ class Updates:
             row=self.s.execute("SELECT task_id FROM outbox WHERE business=? AND (recipient=? OR transport='group') AND message_id=? AND transport=? AND destination_chat=? AND COALESCE(destination_connection,'')=? AND COALESCE(destination_thread,0)=? AND state='sent' ORDER BY id DESC LIMIT 1",
                 (b,sender,str(parent.get('message_id')), 'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'),str(m['chat']['id']),conn or '',(m.get('message_thread_id') or 0) if m.get('message_thread_id')!=1 else 0)).fetchone()
             task_id=row[0] if row else None
-        personal_operator=self.e._operator_turn({'sender':sender,'channel':'business' if conn else ('bot' if m['chat']['type']=='private' else 'group')},'reply')
+        personal_operator=self.e._task_dialogue_turn({'sender':sender,'channel':'business' if conn else ('bot' if m['chat']['type']=='private' else 'group')},'reply')
         if sender in self.c['admins'] and (text.strip()=='/summary' or text.casefold().strip() in ('сводка','дай сводку','покажи задачи','список задач','что по задачам','итоги планёрки')):
             self.e.queue_summary(f"request:{update['update_id']}")
         elif sender in self.c['admins'] and (text.startswith('/meeting ') or (not personal_operator and not parent and (m.get('document') or (len(text)>400 or any(text.casefold().startswith(person['name'].casefold()+':') for person in self.c['employees'].values()) or any(text.startswith(label+':') for label in self.c.get('speaker_aliases',{}))) and not text.startswith('/') and not self.e.reference_ids(text)))):

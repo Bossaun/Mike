@@ -96,7 +96,8 @@ class Engine:
         if text.startswith(title) and (len(text)==len(title) or text[len(title)] in ' :—-«»„“”"'):
             title_linked=True
             text=text[len(title):].lstrip(' :—-«»„“”"')
-        if not text.strip(' .!') or self._question_or_draft(text) or basic_reply(text) is not None:return False
+        if (not text.strip(' .!') or self._question_or_draft(text) or basic_reply(text) is not None
+                or re.match(r'^\s*(?:я\s+)?(?:предлагаю|предложение|идея|давайте|у\s+меня\s+идея|есть\s+идея)\b',text)):return False
         if p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold()) or title_linked:
             return True
         return bool(re.match(r'^\s*(?:я\s+)?(?:жду\b|делаю\b|проверяю\b|работаю\b|почти\b|готов[оаы]?\b|сделал[а]?\b|закончил[а]?\b|подготовил[а]?\b|не\s+успеваю\b|(?:новый\s+)?срок\b|уточняю\s+срок\b)',text))
@@ -188,10 +189,24 @@ class Engine:
                 context['availability']=self.c.get('availability','development')
                 context['can_create_tasks']=p['sender'] in self.c['admins']
                 context['sender_role']='admin' if context['can_create_tasks'] else 'employee'
+                context['can_submit_proposals']=context['can_create_tasks'] or self._closed_team()
+                duplicate=self.s.execute('SELECT value FROM runtime WHERE key=?',
+                    (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',)).fetchone()
+                if duplicate:
+                    with self.s.transaction():
+                        source=p.get('source_id') or event_id
+                        self.s.execute('INSERT INTO sources(business,id,body,link) VALUES(?,?,?,?) ON CONFLICT(business,id) DO NOTHING',
+                            (self.b,source,p['text'],p.get('link',event_id)))
+                        for id in json.loads(duplicate['value'])['tasks']:
+                            self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)',(self.b,id,source))
+                        self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
+                        self.s.audit(self.b,'duplicate_submission',{'event':event_id,'sender':p['sender']},self.now())
+                    return
             explicit_reference=p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())
             explicit_creation=operator and re.search(r'\bсоздай(?:те)?\s+(?:(?:новую|тестовую)\s+)*задачу\b',p['text'].casefold())
             completion_phrase=re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())
-            ambiguous=kind=='reply' and not context['tasks'] and (explicit_reference or (completion_phrase and not explicit_creation and not self._question_or_draft(p['text'])))
+            bare_completion=(not operator or (len(p['text'].splitlines())==1 and re.match(r'^\s*(?:я\s+)?(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())))
+            ambiguous=kind=='reply' and not context['tasks'] and (explicit_reference or (completion_phrase and bare_completion and not explicit_creation and not self._question_or_draft(p['text'])))
             if ambiguous and not general:
                 message='Уточните задачу: ответьте на сообщение о ней или укажите её номер.'
                 result={'actions':[],'summary':message,'reply_text':message,'intent':'conversation'}
@@ -211,11 +226,15 @@ class Engine:
             if not isinstance(result.get('summary',''),str): raise ValueError('Invalid summary')
             reply_text=result.get('summary','')
             if operator:
-                if result.get('intent') not in ('conversation','task_action'):
+                if result.get('intent') not in ('conversation','task_action','idea','meeting'):
                     raise ValueError('Operator chat requires an explicit intent')
                 if result['intent']=='conversation' and actions:
                     raise ValueError('Conversation intent cannot modify tasks')
                 context['task_intent']=result['intent']
+            submission=operator and result['intent'] in ('idea','meeting')
+            proposal_only=submission and (result['intent']=='idea' or p['sender'] not in self.c['admins'])
+            if proposal_only and any(not isinstance(a,dict) or a.get('op')!='create' for a in actions):
+                raise ClarificationRequired('Proposals cannot mutate existing tasks','Идею сохраню как предложение. Изменения существующего поручения должен подтвердить руководитель.')
             if context['kind'] in ('conversation','operator_chat'):
                 reply_text=result.get('reply_text')
                 if not isinstance(reply_text,str) or not reply_text.strip() or len(reply_text)>3000:
@@ -232,21 +251,29 @@ class Engine:
                     if operator and self._closed_team() and a.get('op')=='update':
                         row=self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,a.get('task_id'))).fetchone()
                         if row:before.setdefault(row['id'],dict(row))
-                    if (kind=='transcript' or operator) and self.c.get('review_mode') and a.get('op')=='create':
+                    if (proposal_only or ((kind=='transcript' or operator) and self.c.get('review_mode'))) and a.get('op')=='create':
                         a=dict(a,status='proposed')
                     changed.append(self._apply(a,context,source,kind,p))
                 if kind=='reply' and context['kind']!='conversation':
                     for t in context['tasks']:
                         if operator and not any(a.get('op')=='update' and a.get('task_id')==t['id'] for a in actions):continue
                         self._record_response(t['id'],p['sender'],p.get('received_at',self.now()))
-                if kind=='transcript' and self.c.get('review_mode'):
+                meeting_review=(kind=='transcript' and self.c.get('review_mode')) or (submission and result['intent']=='meeting')
+                review_ids=set()
+                if meeting_review:
                     from .presentation import meeting_messages
                     reviewed=[dict(self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,t)).fetchone()) for t in dict.fromkeys(changed)]
+                    if submission:reviewed=[t for t in reviewed if t['status']=='proposed']
+                    review_ids={t['id'] for t in reviewed} if submission else set(changed)
                     recipients=[self.c['meeting_recipient']] if self.c.get('meeting_recipient') else self.c['admins']
-                    for recipient in recipients:
-                        self.queue_meeting_review(reviewed,event_id,recipient)
+                    for recipient in (recipients if reviewed or not changed else []):
+                        review_key=f'meeting:{p["sender"]}:{fingerprint(p["text"])}' if submission else event_id
+                        self.queue_meeting_review(reviewed,review_key,recipient)
+                    if submission and p['sender'] not in self.c['admins']:
+                        self.s.queue(self.b,p['sender'],'Планёрка разобрана. Предложения переданы руководителю на подтверждение.',
+                            f'meeting-receipt:{p["sender"]}:{fingerprint(p["text"])}',self.now(),preferred_transport=p.get('channel'))
                 action_queued=False
-                for id in ([] if kind=='transcript' and self.c.get('review_mode') else dict.fromkeys(changed)):
+                for id in (id for id in dict.fromkeys(changed) if id not in review_ids):
                     t=dict(self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,id)).fetchone())
                     previous=before.get(id)
                     if previous and t['status'] in ('blocked','completed') and t['evidence']!=previous['evidence']:
@@ -263,6 +290,10 @@ class Engine:
                         if not t['criterion']:missing.append('критерий завершения')
                         if missing:body+='\n\nНужно уточнить: '+', '.join(missing)+'.'
                         if t['status']=='proposed':body+='\nПодтвердите поручение или поправьте детали.'
+                        if proposal_only and p['sender'] not in self.c['admins']:
+                            recipients.extend(self.c['admins'])
+                            body='Идея сохранена как предложение и передана руководителю на подтверждение.'
+                            if id not in context.get('restricted_proposal_ids',set()):body+='\n\n'+task_card(t,self.c)
                         for question in context.get('deadline_questions',[])+context.get('owner_questions',[]):body+='\n'+question
                         if (previous and t['status'] in ('confirmed','in_progress','blocked')
                                 and t['owner'] and t['owner']!=p['sender']
@@ -287,11 +318,16 @@ class Engine:
                         body=f"Задача №{t['public_number']} · {t['title']}\nСледующий шаг: {t['next_step']}\nСрок: {t['deadline'] or 'не указан'}\n"+' '.join(missing or ['Сообщите результат или препятствие.'])
                     for recipient in recipients:
                         message=body;key=f"action:{id}:{t['revision']}:{recipient}"
-                        if operator and recipient!=p['sender'] and p['sender'] in self.c['admins']:
+                        if proposal_only and p['sender'] not in self.c['admins']:
+                            key=f'proposal:{id}:{t["revision"]}:{p["sender"]}:{fingerprint(p["text"])}:{recipient}'
+                            if recipient!=p['sender']:
+                                from .presentation import task_card,clean
+                                message='Предложение от '+clean(self.c['employees'][p['sender']]['name'])+':\n\n'+task_card(t,self.c)+'\n\nИдея сотрудника: '+clean(p['text'],700)+'\n\nПодтвердите поручение или поправьте детали обычным текстом.'
+                        elif operator and recipient!=p['sender'] and p['sender'] in self.c['admins']:
                             from .presentation import task_card
                             display=dict(self.c,employees=dict(self.c['employees']))
                             display['employees'][recipient]=dict(self.c['employees'][recipient],name='Вы')
-                            message=task_card(t,display)+'\n\nСообщите результат, препятствие или следующий шаг обычным текстом с номером задачи.'
+                            message=task_card(t,display)+'\n\nСообщите результат, препятствие или следующий шаг обычным текстом. Можно назвать задачу или ответить на эту карточку.'
                             if not t['deadline']:message+='\nУточните срок.'
                             if not t['criterion']:message+='\nКакой результат подтвердит завершение?'
                             key=f"assignment:{id}:{t['revision']}:{recipient}"
@@ -300,15 +336,19 @@ class Engine:
                             heading='Выполнено: сотрудник сообщил результат.' if t['status']=='completed' else 'Нужно решение: сотрудник сообщил о препятствии.'
                             message=heading+'\n\n'+task_card(t,self.c)+'\n\nСообщение сотрудника: '+clean(t['evidence'],700)
                             key=f"attention:{id}:{t['revision']}:{recipient}"
-                        queued=self.s.queue(self.b,recipient,message,key,self.now(),id,parse_mode='HTML' if operator or (kind=='reply' and p.get('channel')=='group') else None,preferred_transport=p.get('channel') if kind=='reply' and recipient==p['sender'] else None)
+                        associated=None if recipient==p['sender'] and id in context.get('restricted_proposal_ids',set()) else id
+                        queued=self.s.queue(self.b,recipient,message,key,self.now(),associated,parse_mode='HTML' if operator or (kind=='reply' and p.get('channel')=='group') else None,preferred_transport=p.get('channel') if kind=='reply' and recipient==p['sender'] else None)
                         action_queued=action_queued or queued
                 questions=context.get('deadline_questions',[])+context.get('owner_questions',[])
                 if operator and questions and not action_queued:
                     self.s.queue(self.b,p['sender'],'\n'.join(questions),f'field-clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
-                if not actions and kind=='reply':
+                if not actions and kind=='reply' and not meeting_review:
                     self.s.queue(self.b,p['sender'],reply_text or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                 self.s.audit(self.b,'processed',{'event':event_id,'sender':p['sender'],'tasks':changed,'summary':result.get('summary','')[:2000]},self.now())
+                if submission and (changed or result['intent']=='meeting'):
+                    self.s.execute('INSERT OR IGNORE INTO runtime(key,value) VALUES(?,?)',
+                        (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',json.dumps({'tasks':[id for id in dict.fromkeys(changed) if id not in context.get('restricted_proposal_ids',set())],'intent':result['intent']})))
         except Exception as exc:
             self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__+': '+str(exc)[:300],self.b,event_id))
             if kind=='reply':
@@ -340,8 +380,10 @@ class Engine:
         if a.get('op') not in ('create','update'): raise ValueError('Invalid operation')
         if set(a)-FIELDS-{'op','task_id','owner_evidence','deadline_evidence'}: raise ValueError('Unknown action fields')
         operator=(context.get('kind')=='operator_chat' and self._task_dialogue_turn(p,kind)
-                  and context.get('task_intent')=='task_action')
-        if a['op']=='create' and kind!='transcript' and not (operator and p['sender'] in self.c['admins']):
+                  and context.get('task_intent') in ('task_action','idea','meeting'))
+        submission=operator and context.get('task_intent') in ('idea','meeting')
+        employee_proposal=(submission and self._closed_team() and p['sender'] not in self.c['admins'] and a.get('status')=='proposed')
+        if a['op']=='create' and kind!='transcript' and not (operator and (p['sender'] in self.c['admins'] or employee_proposal)):
             if operator:raise ClarificationRequired('Employee cannot create tasks','Новое поручение должен подтвердить и создать руководитель.')
             raise ValueError('Replies cannot create tasks')
         evidence=a.get('evidence','')
@@ -394,7 +436,9 @@ class Engine:
             existing=next((t for t in self.tasks() if fingerprint(t['title'])==fingerprint(a['title']) and t['status']!='completed'),None)
             if existing:
                 id=existing['id']
-                self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)',(self.b,id,source))
+                if employee_proposal and existing['owner']!=p['sender']:
+                    context.setdefault('restricted_proposal_ids',set()).add(id)
+                else:self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)',(self.b,id,source))
                 return id
             id=uuid.uuid4().hex[:12]
             self.s.execute('INSERT INTO tasks(business,id,title,owner,deadline,next_step,criterion,status,source_id,evidence,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
@@ -422,8 +466,8 @@ class Engine:
                     if operator:raise ClarificationRequired('Only admin may confirm proposal','Этот черновик сначала должен подтвердить руководитель.')
                     raise ValueError('Only admin may confirm proposal')
             if operator and old['status']=='proposed' and a.get('status') in ('confirmed','in_progress','blocked'):
-                explicit=bool(re.search(r'\b(подтверждаю|утверждаю|подтверждаем|беру)\b',evidence.casefold()))
-                explicit=explicit and not re.search(r'\bне\s+(подтверждаю|утверждаю|подтверждаем|беру)\b',evidence.casefold())
+                explicit=bool(re.search(r'\b(подтверждаю|утверждаю|подтверждаем|беру|одобряю|согласовываю)\b',evidence.casefold()))
+                explicit=explicit and not re.search(r'\bне\s+(подтверждаю|утверждаю|подтверждаем|беру|одобряю|согласовываю)\b',evidence.casefold())
                 simple_yes=evidence.strip().casefold().strip(' .!')=='да' and len(context['tasks'])==1
                 if not (explicit or simple_yes):raise ClarificationRequired('Draft requires explicit confirmation','Подтвердите черновик задачи или поправьте детали.')
             if a.get('status')=='completed':
