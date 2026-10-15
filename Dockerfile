@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 GOLDWAY_FEATURE_PROFILE=knowledge-reminders-v1
 WORKDIR /app
 COPY pyproject.toml requirements.lock requirements-build.txt ./
 COPY goldway ./goldway

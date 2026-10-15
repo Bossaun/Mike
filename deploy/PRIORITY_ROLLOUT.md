@@ -7,11 +7,17 @@ milestones. A successful deployment with features disabled is not acceptance.
 
 ## Configuration and rollout
 
-Both additions are opt-in. Missing `intelligence` or `scheduling` keeps the old
-runtime. `scheduling` accepts exactly `{"enabled": true|false}`. The SQLite
-scheduling tables are created only when the feature is enabled.
+Both additions are opt-in in the Python configuration. The shipped Docker image
+requests `GOLDWAY_FEATURE_PROFILE=knowledge-reminders-v1`: the Railway TEAM_ONLY
+bootstrap applies its public defaults only to a validated existing five-person
+team and only when private feature fields are absent. Explicit private
+`intelligence`/`scheduling` fields, including disabled values, take precedence.
+Personal/browser modes and the disabled worker do not apply the profile.
+`scheduling` accepts exactly `{"enabled": true|false}`. Its SQLite tables are
+created only when the feature is enabled. Set the environment profile to `off`
+to stop injecting defaults; this does not override explicit private feature fields.
 
-Use `examples/knowledge-and-reminders.closed-team.json` as an overlay, never a
+For explicit configuration use `examples/knowledge-and-reminders.closed-team.json` as an overlay, never a
 replacement for the private config. The reader keys are the existing five from
 the validated closed-team profile; compare with the current roster before use.
 It contains no Telegram IDs or credentials. Copy only `intelligence` and
@@ -90,7 +96,8 @@ re-send earlier invitations, manufacture an employee result or import old chats.
 
 ## Rollback
 
-Restore the previous `intelligence`/`scheduling` fields without touching identities,
+Disable the Docker profile with `GOLDWAY_FEATURE_PROFILE=off` and restore previous
+explicit `intelligence`/`scheduling` fields without touching identities,
 budget or intake marker. Disabling scheduling alone does not remove already
 queued reminders: reconcile or cancel ONLY unsent `reminder:c07:*` and recurring
 assignment rows under the existing delivery procedure before disabling. Never
