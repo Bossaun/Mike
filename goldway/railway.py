@@ -137,6 +137,8 @@ def prepare_team_config(raw, directory, now=time.time):
         if any(record[k] != identity[k] for k in identity):
             raise ValueError('Team start marker identity changed')
     config['team_intake'] = {'recipients': list(TEAM_RECIPIENTS), 'started_at': record['started_at']}
+    from .rollout import apply_team_rollout
+    config = apply_team_rollout(config, os.environ.get('GOLDWAY_FEATURE_PROFILE', ''))
 
     def save_marker():
         if not create_marker:
