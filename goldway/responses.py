@@ -1,6 +1,6 @@
 """Stateless, text-only OpenAI Responses payloads and bounded JSON parsing.
 
-No credentials, network requests, provider history, tools or database access live
+No credentials, network requests, provider-stored history, tools or database access live
 here. Provider errors, refusals and reasoning text never enter error messages.
 """
 
@@ -16,7 +16,9 @@ _EFFORTS = {'low', 'medium', 'high', 'xhigh', 'max'}
 _MAX_TOKENS = 2**63 - 1
 
 
-def responses_payload(config, system, content, schema) -> dict:
+def responses_payload(config, system, content, schema, *, history=None) -> dict:
+    from .provider_dialogue import validated_history
+    history = validated_history([] if history is None else history)
     if not isinstance(config, dict):
         raise ValueError('Invalid Responses configuration')
     model = config.get('model')
@@ -35,7 +37,7 @@ def responses_payload(config, system, content, schema) -> dict:
               {'type': 'json_schema', 'name': 'goldway_actions', 'strict': True,
                'schema': copy.deepcopy(schema)})
     payload = {'model': model, 'instructions': system,
-               'input': [{'role': 'user', 'content': content}],
+               'input': history + [{'role': 'user', 'content': content}],
                'text': {'format': format}, 'max_output_tokens': maximum, 'store': False}
     if 'reasoning_effort' in config:
         effort = config['reasoning_effort']

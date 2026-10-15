@@ -100,6 +100,11 @@ class Intelligence:
             'arbitrary_browser_or_shell': False,
             'external_file_write_tool': False,
         }
+        from .dialogue_focus import build_followup
+        context.pop('followup', None)
+        followup = build_followup(payload['text'], dialogue)
+        if followup:
+            context['followup'] = followup
         continuation = bool(re.search(r'\b(?:давай|давайте|покороче|короче|описание для клиента|подробнее|втор\w*|этот|этим|это направление|него|уточни|откуда ты|напомни)\b', payload['text'], re.I))
         subjects = list(dialogue['entities']) if continuation else []
         second = re.search(r'\b(?:втор\w*|2[- ]?(?:й|ом|го)?)\s+бренд', payload['text'].casefold())
@@ -108,6 +113,17 @@ class Intelligence:
         if continuation and dialogue['topic']: query += '\n' + dialogue['topic']
         offer = dialogue['pending_offer']
         if continuation and offer: query += '\n' + offer['text']
+        if followup:
+            # Retrieval follows the concrete delivered answer, even when the
+            # model left an older broad topic/entities in its replacement state.
+            query = payload['text'] + '\n' + followup['target_answer']
+            if followup['kind'] == 'explain_entity':
+                subjects = [followup['selected_entity']]
+                query = payload['text'] + '\n' + followup['selected_entity']
+            else:
+                # All last-answer follow-ups must avoid mandatory filters from
+                # an older copied entity list, including bare acceptance.
+                subjects = []
         context['knowledge'] = self.index.search(query, self.reader(payload['sender']), now=now,
                                                 limit=5, max_chars=self.knowledge_chars, subjects=subjects)
         # Focus helps resolve a short continuation; existing task permission/evidence
@@ -127,6 +143,7 @@ class Intelligence:
         refs = set(self.evidence(context['knowledge'])) | set(context['dialogue_evidence_ids']) | task_refs
         if len(refs) > 16:
             # Never truncate provenance while retaining its protected content.
+            context.pop('followup', None)
             context['dialogue'] = {'turns': [], 'topic': '', 'entities': [], 'pending_offer': None, 'task_id': None}
             context['dialogue_evidence_ids'] = []
             context['knowledge'] = {'evidence': [], 'facts': [], 'conflicts': [], 'status': 'no_evidence'}
