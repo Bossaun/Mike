@@ -181,6 +181,10 @@ class Engine:
             if is_recount_command(text):
                 if added:handle_recount(self, event_id, payload)
                 return added
+            from .task_card_command import is_task_card_command, handle_task_card
+            if is_task_card_command(text):
+                if added:handle_task_card(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
