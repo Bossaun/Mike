@@ -91,6 +91,9 @@ class Intelligence:
 
     def enrich(self, payload, context, now):
         self.sources.refresh(now=now)
+        context.pop('source_health', None)
+        health = self._source_health(payload['sender'])
+        if health is not None:context['source_health'] = health
         allowed = self.readable_ids(payload['sender'], now)
         memory_allowed = allowed
         if self._independent_task_request(payload, context):
@@ -188,6 +191,69 @@ class Intelligence:
         context['task_evidence_ids'] = sorted(task_refs)
         return scope
 
+    def _source_health(self, sender):
+        """Non-grounding last-status counts, only current readable registrations.
+
+        No source identity, provider text, grant, retrieval success or clock is
+        projected. An ok status is not proof of current freshness/completeness.
+        """
+        members = set(self.c.get('employees', {})) | set(self.c.get('admins', []))
+        if sender not in members:return None
+        reader = self.reader(sender)
+        readable = set()
+        for spec in self.sources.specs:
+            source, readers = spec.get('id'), spec.get('readers')
+            if (type(source) is str and source.startswith(self.prefix)
+                    and type(readers) is list and reader in readers
+                    and reader in self.sources.members):
+                readable.add(source)
+        # Optional explicitly injected I01 registrations, never source discovery.
+        bridge = getattr(self.sources, 'trusted_bridge', None)
+        if bridge is not None and bridge.business == self.b:
+            for binding in bridge.bindings:
+                if reader in binding.audience and reader in self.sources.members:
+                    readable.add(bridge.source_id(binding))
+        if len(readable)>16:raise ValueError('Source health registration bound exceeded')
+        counts = dict(ok=0, blocked=0, unavailable=0, unknown=0)
+        for source in readable:
+            status = self.sources.status.get(source)
+            code = status if type(status) is str and status in counts else 'unknown'
+            counts[code] += 1
+        return dict(non_grounding=True, registered_readable=len(readable),
+                    last_refresh_counts=counts)
+
+    @staticmethod
+    def _knowledge_fallback(health):
+        generic = ('В доступных вам источниках нет подтверждённых сведений по этому вопросу. '
+                   'Могу опираться на подключённые документы и доступные рабочие задачи; '
+                   'чтобы ответить конкретно, пришлите актуальную справку по этой теме.')
+        if type(health) is not dict or health.get('non_grounding') is not True:return generic
+        counts = health.get('last_refresh_counts')
+        total = health.get('registered_readable')
+        if (type(total) is not int or not 0<=total<=16 or type(counts) is not dict
+                or set(counts)!={'ok','blocked','unavailable','unknown'}
+                or any(type(value) is not int or not 0<=value<=16 for value in counts.values())
+                or sum(counts.values())!=total):return generic
+        if not total:
+            return ('Для вас не зарегистрированы доступные источники знаний. '
+                    'Поэтому подтвердить сведения по этому вопросу не могу. '
+                    'Пришлите актуальную справку для разбора; доступ к источникам сам не расширяю.')
+        failed = counts['blocked']+counts['unavailable']
+        if failed:
+            extent = 'Все зарегистрированные для вас источники' if failed==total else 'Часть зарегистрированных для вас источников'
+            return (extent+' при последнем обращении были недоступны или заблокированы. '
+                    'Подтверждённых сведений по этому вопросу у меня нет; '
+                    'это не означает, что таких сведений нет в самих источниках. '
+                    'Пришлите актуальную справку или проверьте доступность источников.')
+        if counts['unknown']:
+            return ('Состояние зарегистрированных для вас источников пока не подтверждено. '
+                    'Подтверждённых сведений по этому вопросу у меня нет; '
+                    'пришлите актуальную справку для разбора.')
+        return ('В доступных вам источниках не найдено подходящих подтверждённых сведений по этому вопросу. '
+                'Последнее обращение к зарегистрированным для вас источникам прошло без сообщения об ошибке; '
+                'это не подтверждает полноту или актуальность их данных. '
+                'Пришлите актуальную справку по этой теме.')
+
     @staticmethod
     def _independent_task_request(payload, context):
         text = payload['text']
@@ -270,6 +336,11 @@ class Intelligence:
                 result['reply_text'] = self._work_fallback(work)
                 refs = [item['id'] for item in work['evidence']]
                 result.update(evidence_ids=refs, knowledge_mode='grounded')
+            elif work and work.get('scope') == 'current_authorized_registered_task_result':
+                result['reply_text'] = (
+                    'В доступных мне записях нет зарегистрированного подтверждённого результата этой задачи. '
+                    'Текущий статус задачи и текст переписки сами по себе не подтверждают результат. '
+                    'Это не означает, что работа не выполнена; нужен явно зарегистрированный результат.')
             elif work:
                 result['reply_text'] = (
                     'Подтверждённого обзора проблем бизнеса у меня пока нет. '
@@ -278,10 +349,7 @@ class Intelligence:
                     'а не внутреннюю работу. Пришлите свежие итоги планёрки с проблемами и решениями '
                     '— разберу их и покажу поручения на согласование.')
             else:
-                result['reply_text'] = (
-                    'В доступных вам источниках нет подтверждённых сведений по этому вопросу. '
-                    'Могу опираться на подключённые документы и доступные рабочие задачи; '
-                    'чтобы ответить конкретно, пришлите актуальную справку по этой теме.')
+                result['reply_text'] = self._knowledge_fallback(context.get('source_health'))
         if mode == 'conflict' and any(c.get('resolution') == 'unresolved' for c in context['knowledge'].get('conflicts', [])):
             result['reply_text'] = 'Источники противоречат друг другу; единого подтверждённого ответа пока нет.\n' + result.get('reply_text', '')
         if refs:
