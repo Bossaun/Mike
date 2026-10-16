@@ -189,6 +189,8 @@ class Intelligence:
                     kept.append(task); task_refs = candidate
             context['tasks'] = kept
         context['task_evidence_ids'] = sorted(task_refs)
+        from .answer_citations import seal_answer_context
+        seal_answer_context(self.s,self.c,payload,context,now)
         return scope
 
     def _source_health(self, sender):
@@ -402,6 +404,8 @@ class Intelligence:
             self.protect_outbox(row['id'], refs)
         own = [r for r in rows if r['recipient'] == payload['sender']]
         if scope and own:
+            from .answer_citations import capture_answer
+            capture_answer(self.s,self.c,event_id,payload,result,evidence_ids,own,now)
             state = dict(result['dialogue_state'])
             visible = {r['task_id'] for r in own if r['task_id']} - context.get('restricted_proposal_ids', set())
             candidates = set(changed) & visible

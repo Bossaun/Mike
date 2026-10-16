@@ -151,6 +151,11 @@ class Engine:
             payload['message_at']=message_at
         with nullcontext() if self.s.db.in_transaction else self.s.transaction():
             added=self.s.event(self.b,event_id,'reply',payload)
+            from .answer_citations import is_source_followup, handle_source_followup, begin_answer
+            if is_source_followup(text):
+                if added:handle_source_followup(self,event_id,payload)
+                return added
+            if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
             if text == '/trace':
                 if added:
                     from .trace_adapter import handle_trace
@@ -703,7 +708,7 @@ class Engine:
                 '\nНужно решение: '+lines([t for t in tasks if t['status'] in ('blocked','proposed') or not t['owner'] or not t['deadline']]))
 
     def queue_summary(self, key):
-        with self.s.transaction():
+        with nullcontext() if self.s.db.in_transaction else self.s.transaction():
             for recipient in ([self.c['meeting_recipient']] if self.c.get('meeting_recipient') else self.c['admins']):
                 dedupe=f'summary:{key}:{recipient}'
                 self.s.queue(self.b,recipient,self.summary(recipient),dedupe,self.now())

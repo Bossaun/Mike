@@ -219,9 +219,12 @@ class Updates:
                 if group not in [str(x) for x in self.c.get('allowed_group_ids',[])]: return
                 self.s.execute('INSERT INTO chats(business,recipient,group_chat,group_thread_id) VALUES(?,?,?,?) ON CONFLICT(business,recipient) DO UPDATE SET group_chat=excluded.group_chat,group_thread_id=excluded.group_thread_id',(b,sender,group,m.get('message_thread_id') if m.get('message_thread_id')!=1 else None))
         text=m.get('text',m.get('caption',''))
+        source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
+        from .answer_citations import observe_inbound
         if m.get('document') and sender in self.c['admins']:
             doc=m['document']
             if not doc.get('file_name','').lower().endswith('.txt') or doc.get('file_size',0)>64000: return
+            observe_inbound(self.e,f"update:{update['update_id']}",sender,'business' if conn else 'bot',source,'accepted attachment')
             text=self.api.document(doc['file_id'])
             if 'team_intake' in self.c and len(text)>self.c.get('max_transcript_chars',32000):
                 self.s.queue(b,sender,
@@ -238,13 +241,13 @@ class Updates:
                 text=command+(' '+rest[0] if rest else '')
         elif not m.get('document') and self.c.get('bot_username'):
             text=text.replace('@'+self.c['bot_username'],'').strip()
+        observe_inbound(self.e,f"update:{update['update_id']}",sender,'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'),source,text)
         if not m.get('document') and not self.e.intelligence and text.casefold() in ('привет','здравствуйте','добрый день','hello'):
             self.s.queue(b,sender,'Привет! Пишите обычным текстом: задайте вопрос, предложите идею, пришлите планёрку или сообщите результат работы. Если нужно уточнить задачу, назовите её или ответьте на карточку. Команды не нужны.',f"hello:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
         if not m.get('document') and text=='/start':
             self.s.queue(b,sender,'Вы подключены к помощнику GOLDWAY. Можно общаться обычным текстом, прислать идею или планёрку. Например: «Как идут наши задачи?» или «Есть идея улучшить упаковку». Команды не нужны.',f"start:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
-        source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
         if kind.startswith('edited'):
             self._supersede(source)
             self.s.audit(b,'source_edited',{'source':source},self.e.now())

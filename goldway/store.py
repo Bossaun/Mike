@@ -69,6 +69,12 @@ CREATE TRIGGER IF NOT EXISTS task_history_observation_no_delete BEFORE DELETE ON
 CREATE TABLE IF NOT EXISTS pending_members(
  business TEXT NOT NULL, user_id TEXT NOT NULL, label TEXT NOT NULL, first_seen REAL NOT NULL,
  PRIMARY KEY(business,user_id));
+CREATE TABLE IF NOT EXISTS answer_citation_turns(
+ id INTEGER PRIMARY KEY, business TEXT NOT NULL, scope_key TEXT NOT NULL,
+ event_key TEXT NOT NULL, at REAL NOT NULL, phase TEXT NOT NULL DEFAULT 'pending',
+ outbox_ids TEXT, protection_refs TEXT, citations TEXT, seals TEXT,
+ UNIQUE(business,scope_key,event_key));
+CREATE INDEX IF NOT EXISTS answer_citation_latest ON answer_citation_turns(business,scope_key,id DESC);
 CREATE TABLE IF NOT EXISTS runtime(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
