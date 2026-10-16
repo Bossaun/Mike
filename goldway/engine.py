@@ -147,6 +147,11 @@ class Engine:
             payload['message_at']=message_at
         with nullcontext() if self.s.db.in_transaction else self.s.transaction():
             added=self.s.event(self.b,event_id,'reply',payload)
+            if text == '/trace':
+                if added:
+                    from .trace_adapter import handle_trace
+                    handle_trace(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
