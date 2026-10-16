@@ -101,7 +101,11 @@ If context.rewrite_only=true, transform ONLY followup.target_answer: preserve it
 uncertainties and conditions; do not invent or research details, use older offers, or
 perform tasks. Return actions:[], knowledge_mode=not_needed and evidence_ids:[].
 Do not write a source footer; trusted code appends the saved original sources.
-Respect context.rewrite_reply_chars; target_answer includes the complete original.
+Respect context.rewrite_reply_chars; target_answer includes the complete original
+unless ordinal_only=true. For ordinal_only, it is ONLY the verified selected numbered
+item; explain that literal item and its conditions, never other items, external
+knowledge or new research. Say explicitly that missing details are unknown. The
+selected number/name comes from the delivered text, not model dialogue entities.
 Complete permitted task actions through actions, then let code report actual results.
 Do not imply that a bigger model grants browser/shell, spreadsheet/file-write access
 or arbitrary Telegram sends. For unavailable actions explain the concrete missing

@@ -158,6 +158,8 @@ class Engine:
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
             from .answer_rewrite import is_rewrite_request
             if self._closed_team() and payload.get('channel') in ('bot','business') and is_rewrite_request(text):return added
+            from .ordinal_followup import is_ordinal_request
+            if self._closed_team() and payload.get('channel') in ('bot','business') and is_ordinal_request(text):return added
             if text == '/trace':
                 if added:
                     from .trace_adapter import handle_trace
@@ -336,6 +338,10 @@ class Engine:
             from .answer_rewrite import is_rewrite_request, handle_answer_rewrite
             if kind=='reply' and 'team_intake' in self.c and is_rewrite_request(p['text']):
                 handle_answer_rewrite(self,event_id,p)
+                return
+            from .ordinal_followup import is_ordinal_request, handle_ordinal_followup
+            if kind=='reply' and 'team_intake' in self.c and is_ordinal_request(p['text']):
+                handle_ordinal_followup(self,event_id,p)
                 return
             if self.intelligence:self.intelligence.sources.refresh(self.now())
             context=self._context(p,kind)

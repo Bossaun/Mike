@@ -52,13 +52,13 @@ def _target(engine,event_id,payload,reader):
     return target
 
 
-def _clarify(engine,event_id,payload):
+def _clarify(engine,event_id,payload,notice=_UNAVAILABLE,prefix="answer-rewrite"):
     try:scope,_=_gate(engine,payload)
     except (ValueError,TypeError,KeyError):
         engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(engine.b,event_id))
         return
     with nullcontext() if engine.s.db.in_transaction else engine.s.transaction():
-        engine.s.queue(engine.b,payload['sender'],_UNAVAILABLE,'answer-rewrite:'+event_id,engine.now(),
+        engine.s.queue(engine.b,payload['sender'],notice,prefix+':'+event_id,engine.now(),
                        preferred_transport=payload['channel'])
         engine.s.execute("UPDATE answer_citation_turns SET phase='unavailable' WHERE business=? AND scope_key=? AND event_key=?",
                          (engine.b,_hash(scope),_hash(event_id)))
@@ -88,6 +88,15 @@ def _checked_result(engine,result,limit):
 
 def handle_answer_rewrite(engine,event_id,payload):
     if not is_rewrite_request(payload.get('text')):_deny()
+    def prepare(target):
+        hint=build_followup(payload['text'],{'turns':[{'role':'assistant','content':target['answer']}],
+                                           'pending_offer':None,'entities':[]})
+        return dict(hint,target_answer=target['answer'],pending_offer=None) if hint else None
+    return _handle_readonly_answer(engine,event_id,payload,prepare)
+
+
+def _handle_readonly_answer(engine,event_id,payload,prepare,*,ordinal=False,notice=_UNAVAILABLE,prefix='answer-rewrite'):
+    def clarify():return _clarify(engine,event_id,payload,notice,prefix)
     try:_gate(engine,payload)
     except (ValueError,TypeError,KeyError):
         engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(engine.b,event_id))
@@ -96,18 +105,16 @@ def handle_answer_rewrite(engine,event_id,payload):
     reader=_Reader(engine.s)
     try:target=_target(engine,event_id,payload,reader)
     except Exception:
-        _clarify(engine,event_id,payload);return
-    # Preserve the whole original, including its footer, as supplied data. No
-    # parsing of answer text creates citation authority or removes conditions.
-    hint=build_followup(payload['text'],{'turns':[{'role':'assistant','content':target['answer']}],
-                                       'pending_offer':None,'entities':[]})
-    if not hint:_clarify(engine,event_id,payload);return
-    hint=dict(hint,target_answer=target['answer'],pending_offer=None)
+        clarify();return
+    # The caller selects a bounded text projection only; saved receipt refs
+    # remain the sole citation authority for every read-only derivative.
+    hint=prepare(target)
+    if not hint:clarify();return
     footer=('\n\nИсточники исходного ответа:\n'+'\n'.join(target['labels'])) if target['labels'] else ''
     limit=3000-len(footer)
-    if limit<128:_clarify(engine,event_id,payload);return
+    if limit<128:clarify();return
     context=dict(kind='conversation',business=engine.b,sender=payload['sender'],text=payload['text'],
-        intelligence=True,rewrite_only=True,rewrite_reply_chars=limit,followup=hint,
+        intelligence=True,rewrite_only=True,rewrite_reply_chars=limit,followup=hint,ordinal_only=ordinal,
         tasks=[],employees={},knowledge={'evidence':[],'facts':[],'conflicts':[],'status':'no_evidence'},
         dialogue={'turns':[],'topic':'','entities':[],'pending_offer':None,'task_id':None},
         capabilities={'answer_rewrite':'existing_answer_text_only','task_mutations':False},recent_summaries=[])
@@ -122,9 +129,9 @@ def handle_answer_rewrite(engine,event_id,payload):
     with nullcontext() if engine.s.db.in_transaction else engine.s.transaction():
         try:fresh=_target(engine,event_id,payload,reader)
         except Exception:
-            _clarify(engine,event_id,payload);return
-        if fresh!=target:_clarify(engine,event_id,payload);return
-        key='answer-rewrite:'+event_id
+            clarify();return
+        if fresh!=target:clarify();return
+        key=prefix+':'+event_id
         queued=engine.s.queue(engine.b,payload['sender'],text,key,engine.now(),preferred_transport=payload['channel'])
         if not queued:return
         row=engine.s.execute('SELECT id,text FROM outbox WHERE business=? AND dedupe=?',(engine.b,key)).fetchone()
