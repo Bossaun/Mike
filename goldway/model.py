@@ -70,6 +70,15 @@ def response_schema(context):
                 'task_id':nullable_text},'required':['topic','entities','pending_offer','task_id']},
             'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':12},
             'knowledge_mode':{'type':'string','enum':['grounded','conflict','not_found','not_needed']}})
+        # Constrain provider output to the same current evidence accepted by
+        # validation. Historic dialogue IDs are provenance, not current citations.
+        from .intelligence import Intelligence
+        refs = sorted(Intelligence.evidence(context.get('knowledge', {}), context.get('work_context')))
+        citation_schema = schema['properties']['evidence_ids']
+        if refs:
+            citation_schema['items']['enum'] = refs
+        else:
+            citation_schema['maxItems'] = 0
         schema['required'].extend(['dialogue_state','evidence_ids','knowledge_mode'])
     return schema
 
@@ -192,16 +201,20 @@ class JsonModel:
         if api not in ('chat_completions','responses') or (api=='responses' and c['provider']!='openai'):
             raise ValueError('Unsupported model API selection')
         payload = None
+        schema = response_schema(context)
+        schema_bytes = (len(json.dumps(schema, ensure_ascii=False).encode())
+                        if context.get('intelligence') and c['provider'] == 'openai'
+                        and (api == 'responses' or not c.get('json_mode')) else 0)
         if api == 'responses':
             from .responses import responses_payload
-            payload = responses_payload(c, system, content, response_schema(context), history=history)
+            payload = responses_payload(c, system, content, schema, history=history)
         timeout = c.get('timeout_seconds',60)
         if type(timeout) not in (int,float) or not 0 < timeout <= 180:
             raise ValueError('Model timeout must be positive and at most 180 seconds')
         # Reserve a conservative full-call upper bound before contacting the provider.
         # UTF-8 bytes bound input tokens conservatively; output has a hard provider limit.
         input_bound = (len(content.encode()) + len(system.encode())
-                       + sum(len(turn['content'].encode()) for turn in history) + 1024)
+                       + sum(len(turn['content'].encode()) for turn in history) + schema_bytes + 1024)
         input_rate, output_rate = c['input_per_million'], c['output_per_million']
         threshold = c.get('long_context_threshold')
         if threshold is not None:
@@ -242,7 +255,7 @@ class JsonModel:
                     r = client.post(c.get('base_url','https://api.openai.com')+'/v1/chat/completions',
                         headers={'Authorization':'Bearer '+self.key},
                         json={'model':c['model'],'max_completion_tokens':c.get('max_output_tokens',3000),
-                              'response_format':({'type':'json_object'} if c.get('json_mode') else {'type':'json_schema','json_schema':{'name':'goldway_actions','strict':True,'schema':response_schema(context)}}),
+                              'response_format':({'type':'json_object'} if c.get('json_mode') else {'type':'json_schema','json_schema':{'name':'goldway_actions','strict':True,'schema':schema}}),
                               'messages':[{'role':'system','content':system}] + history + [{'role':'user','content':content}]})
                     r.raise_for_status(); data=r.json(); raw=data['choices'][0]['message']['content']
                     usage=data.get('usage',{}); inp=usage.get('prompt_tokens',0); out=usage.get('completion_tokens',0)

@@ -480,6 +480,10 @@ class Engine:
             self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(event_error(exc),self.b,event_id))
             if kind=='reply':
                 notice=exc.notice if isinstance(exc,ClarificationRequired) else 'Я получил сообщение, но сейчас не могу его обработать. Попробуйте ещё раз чуть позже.'
+                if event_error(exc) == 'ValueError: knowledge_citations':
+                    notice = ('Не удалось подтвердить источники для ответа. '
+                              'Непроверенный ответ не использован для изменения поручений. '
+                              'Уточните конкретный вопрос или пришлите актуальную справку по теме.')
                 self.s.queue(self.b,p['sender'],notice,f'error:{event_id}',self.now(),preferred_transport=p.get('channel'))
             raise
 
