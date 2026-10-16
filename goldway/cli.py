@@ -12,6 +12,7 @@ from .engine import Engine
 from .model import JsonModel, ScriptedModel
 from .telegram import Telegram, Dispatcher, Updates, bootstrap_groups
 from .sheets import Sheets
+from .errors import event_error, event_log_error
 
 ALLOWED_UPDATES=['my_chat_member','message','edited_message','business_connection','business_message','edited_business_message','deleted_business_messages']
 
@@ -31,8 +32,12 @@ def pending(e, updates=None, should_stop=lambda:False):
                 e.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(e.b,ev['id']))
             else: e.process(ev['id'])
         except Exception as exc:
-            e.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__,e.b,ev['id']))
-            print(f"Event {ev['id']}: {type(exc).__name__}; inspect local events.error",file=sys.stderr)
+            # Engine.process has already recorded its failure. Only fill the
+            # failure here when processing failed before that handler ran.
+            e.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=? AND state='pending'",(event_error(exc),e.b,ev['id']))
+            row=e.s.execute("SELECT error FROM events WHERE business=? AND id=?",(e.b,ev['id'])).fetchone()
+            diagnostic=event_log_error(row['error'] if row else None,exc)
+            print(f"Event {ev['id']}: {diagnostic}; inspect local events.error",file=sys.stderr)
 
 
 def register_team_bot_identity(config, bot):

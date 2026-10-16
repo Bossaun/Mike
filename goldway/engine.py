@@ -11,6 +11,7 @@ STATUSES = {'confirmed','proposed','in_progress','blocked','completed'}
 FIELDS = {'title','owner','deadline','next_step','criterion','status','evidence'}
 REFERENCE_PATTERN = r'(?:№|#|задач[ауеи]?\s*)(?:\s*№)?\s*(\d+)'
 from .conversation import basic_reply, is_general
+from .errors import event_error
 
 class ClarificationRequired(ValueError):
     def __init__(self,reason,notice=None):
@@ -476,7 +477,7 @@ class Engine:
                     self.s.execute('INSERT OR IGNORE INTO runtime(key,value) VALUES(?,?)',
                         (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',json.dumps({'tasks':[id for id in dict.fromkeys(changed) if id not in context.get('restricted_proposal_ids',set())],'intent':result['intent']})))
         except Exception as exc:
-            self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__+': '+str(exc)[:300],self.b,event_id))
+            self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(event_error(exc),self.b,event_id))
             if kind=='reply':
                 notice=exc.notice if isinstance(exc,ClarificationRequired) else 'Я получил сообщение, но сейчас не могу его обработать. Попробуйте ещё раз чуть позже.'
                 self.s.queue(self.b,p['sender'],notice,f'error:{event_id}',self.now(),preferred_transport=p.get('channel'))
