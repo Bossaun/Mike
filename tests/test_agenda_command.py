@@ -126,5 +126,7 @@ def test_real_general_reply_model_receives_only_current_sender_agenda_capability
     assert len(observed)==1 and observed[0]['agenda_preview']==expected
     assert observed[0]['automatic_agenda_dispatch'] is False
     assert ('agenda_preview_request' in observed[0])==(expected is not False)
+    assert observed[0]['task_history_report']==('explicit_request_selected_registered_transitions_only' if expected is not False else False)
+    assert ('task_history_report_request' in observed[0])==(expected is not False)
     assert not s.rows('SELECT id FROM tasks')
     assert s.execute("SELECT state FROM events WHERE id='capability'").fetchone()[0]=='done'

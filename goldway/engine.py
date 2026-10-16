@@ -160,6 +160,10 @@ class Engine:
             if is_agenda_command(text):
                 if added:handle_agenda(self, event_id, payload)
                 return added
+            from .task_history_command import is_history_command, handle_task_history
+            if is_history_command(text):
+                if added:handle_task_history(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
@@ -332,8 +336,10 @@ class Engine:
                 agenda_available = 'team_intake' in self.c and self._operator_turn(p, 'reply')
                 context['capabilities']['agenda_preview'] = ('explicit_request_current_task_draft' if agenda_available else False)
                 context['capabilities']['automatic_agenda_dispatch'] = False
+                context['capabilities']['task_history_report'] = ('explicit_request_selected_registered_transitions_only' if agenda_available else False)
                 if agenda_available:
                     context['capabilities']['agenda_preview_request'] = 'Подготовь повестку следующей планёрки'
+                    context['capabilities']['task_history_report_request'] = 'Покажи статистику задач за этот месяц'
             if self.scheduler and kind == 'reply':
                 context['scheduling_enabled'] = True
                 context.setdefault('capabilities', {})['agreed_time_reminders'] = True
