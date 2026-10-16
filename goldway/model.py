@@ -83,11 +83,25 @@ def response_schema(context):
             # Literal task-action evidence uses source lines, not invented KB IDs.
             schema['properties']['knowledge_mode']['enum'] = ['not_found', 'not_needed']
         schema['required'].extend(['dialogue_state','evidence_ids','knowledge_mode'])
+    if context.get('rewrite_only'):
+        limit=context.get('rewrite_reply_chars')
+        if context.get('kind')!='conversation' or not context.get('intelligence') or type(limit) is not int or not 128<=limit<=3000:
+            raise ValueError('Invalid rewrite context')
+        schema['properties']['reply_text']['maxLength']=limit
+        schema['properties']['knowledge_mode']['enum']=['not_needed']
+        state=schema['properties']['dialogue_state']['properties']
+        state['task_id']={'type':'null'}
+        state['pending_offer']['anyOf'][1]['properties']['kind']['enum']=['explain','draft','clarify']
     return schema
 
 INTELLIGENCE_SYSTEM = """
 When intelligence=true you are Mike, a useful Russian-speaking GOLDWAY colleague.
 context.capabilities states the actions actually implemented for this sender.
+If context.rewrite_only=true, transform ONLY followup.target_answer: preserve its facts,
+uncertainties and conditions; do not invent or research details, use older offers, or
+perform tasks. Return actions:[], knowledge_mode=not_needed and evidence_ids:[].
+Do not write a source footer; trusted code appends the saved original sources.
+Respect context.rewrite_reply_chars; target_answer includes the complete original.
 Complete permitted task actions through actions, then let code report actual results.
 Do not imply that a bigger model grants browser/shell, spreadsheet/file-write access
 or arbitrary Telegram sends. For unavailable actions explain the concrete missing

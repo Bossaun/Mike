@@ -207,12 +207,16 @@ def capture_answer(store,config,event_id,payload,result,protection,own,now):
         store.execute("UPDATE answer_citation_turns SET phase='unavailable',outbox_ids=NULL,protection_refs=NULL,citations=NULL WHERE business=? AND scope_key=? AND event_key=?",key)
 
 
-def _resolve(store,config,payload,now,*,reader=None):
+def _resolve(store,config,payload,now,*,reader=None,anchor_id=None,include_answer=False):
     scope,parts=_scope(config,payload)
     reader=reader if reader is not None else _Reader(store)
-    row=reader.query('SELECT '+_bounded_columns({name:_text(name,8192,True) for name in ('outbox_ids','protection_refs','citations','phase')})+
-        ',id FROM answer_citation_turns WHERE business=? AND scope_key=? AND id=(SELECT id FROM answer_citation_turns WHERE business=? AND scope_key=? ORDER BY id DESC LIMIT 1)',
-        (config['business'],_hash(scope),config['business'],_hash(scope)))
+    columns='SELECT '+_bounded_columns({name:_text(name,8192,True) for name in ('outbox_ids','protection_refs','citations','phase')})+',id FROM answer_citation_turns '
+    if anchor_id is None:
+        row=reader.query(columns+'WHERE business=? AND scope_key=? AND id=(SELECT id FROM answer_citation_turns WHERE business=? AND scope_key=? ORDER BY id DESC LIMIT 1)',
+            (config['business'],_hash(scope),config['business'],_hash(scope)))
+    else:
+        if type(anchor_id) is not int or not 0<anchor_id<2**63:_fail()
+        row=reader.query(columns+'WHERE business=? AND scope_key=? AND id=?',(config['business'],_hash(scope),anchor_id))
     if not row or row[0]['phase']!='recorded':_fail()
     row=row[0];outbox=json.loads(row['outbox_ids']);refs=json.loads(row['protection_refs']);citations=json.loads(row['citations'])
     if type(outbox) is not list or len(outbox)!=1 or type(citations) is not list or len(citations)>12:_fail()
@@ -244,7 +248,11 @@ def _resolve(store,config,payload,now,*,reader=None):
     text=('Основания последнего содержательного ответа в этой переписке:\n'+'\n'.join(labels)+
           '\nЭто сохранённые ссылки того ответа, а не новый поиск или независимая проверка фактов.') if labels else _NONE
     if len(text.encode('utf-16-le'))//2>3500:_fail()
-    return text,tuple(refs),_hash([row,answer,metadata,config['admins'],config['employees']])
+    fingerprint=_hash([row,answer,metadata,config['admins'],config['employees']])
+    if include_answer:
+        return dict(answer=answer['text'],protection=tuple(refs),citations=tuple(citations),
+                    labels=tuple(labels),fingerprint=fingerprint,outbox_id=receipt['id'])
+    return text,tuple(refs),fingerprint
 
 
 def handle_source_followup(engine,event_id,payload):
