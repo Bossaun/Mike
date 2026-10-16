@@ -79,6 +79,9 @@ def response_schema(context):
             citation_schema['items']['enum'] = refs
         else:
             citation_schema['maxItems'] = 0
+            # Grounded/conflict require a current citation in Intelligence.validate.
+            # Literal task-action evidence uses source lines, not invented KB IDs.
+            schema['properties']['knowledge_mode']['enum'] = ['not_found', 'not_needed']
         schema['required'].extend(['dialogue_state','evidence_ids','knowledge_mode'])
     return schema
 
