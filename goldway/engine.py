@@ -172,6 +172,10 @@ class Engine:
             if is_design_brief_command(text):
                 if added:handle_design_brief(self, event_id, payload)
                 return added
+            from .recount_command import is_recount_command, handle_recount
+            if is_recount_command(text):
+                if added:handle_recount(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
