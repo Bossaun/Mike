@@ -48,6 +48,28 @@ _WEEKDAY = re.compile(
     r"четверг[а-яё]*|пятниц[а-яё]*|суббот[а-яё]*|воскресень[а-яё]*|"
     r"пн|вт|ср|чт|пт|сб|вс)\b"
 )
+_WEEKDAY_FORMS = {
+    'понедельник': 0, 'понедельника': 0, 'понедельнику': 0, 'пн': 0,
+    'вторник': 1, 'вторника': 1, 'вторнику': 1, 'вт': 1,
+    'среда': 2, 'среду': 2, 'среды': 2, 'среде': 2, 'ср': 2,
+    'четверг': 3, 'четверга': 3, 'четвергу': 3, 'чт': 3,
+    'пятница': 4, 'пятницу': 4, 'пятницы': 4, 'пятнице': 4, 'пт': 4,
+    'суббота': 5, 'субботу': 5, 'субботы': 5, 'субботе': 5, 'сб': 5,
+    'воскресенье': 6, 'воскресенья': 6, 'воскресенью': 6, 'вс': 6,
+}
+_EXPLICIT_WEEKDAY = re.compile(
+    r'\b(?:к|до|в|во|на)\s+(?P<day>'
+    + '|'.join(sorted(_WEEKDAY_FORMS, key=len, reverse=True)) + r')\b'
+)
+_NEGATED_WEEKDAY = re.compile(
+    r'\b(?:не|ни|нет|нельзя|невозмож[а-яё]*|невыполним[а-яё]*|'
+    r'отмен[а-яё]*|неактуал[а-яё]*|неверн[а-яё]*)\b'
+)
+_TRAILING_WEEKDAY_QUALIFIER = re.compile(
+    r'\s+(?:(?:именно|только)\s+)?(?:'
+    r'(?:следующ|будущ|прошл|текущ|ближайш|кажд)[а-яё]*|'
+    r'этой|эту|этого|этому|этом|этот(?=\s*[,.;!?]|\s*$))\b'
+)
 _UNCERTAIN = re.compile(
     r"\b(?:наверно|наверное|возможно|вероятно|предположительно|"
     r"ориентировочно|примерно|приблизительно|около|раньше|ранее|позже|"
@@ -81,7 +103,7 @@ def is_relative_deadline(text: str) -> bool:
         raise TypeError("Deadline evidence must be text")
     value = " ".join(text.casefold().split())
     return bool(_RELATIVE.search(value) or re.search(r"\b(?:через|спустя)\b", value)
-                or _EXPLICIT_DURATION.search(value))
+                or _EXPLICIT_DURATION.search(value) or _WEEKDAY.search(value))
 
 
 def resolve_deadline(text: str, reference: datetime) -> str | None:
@@ -93,14 +115,25 @@ def resolve_deadline(text: str, reference: datetime) -> str | None:
     today/tomorrow/day-after-tomorrow and explicit calendar-day durations
     (``через N дней``, ``срок N дней``, ``в течение N дней``, 1..365) are supported.
     Durations start on the original message date supplied by the caller.
+    Explicit unqualified weekdays (к пятнице, до пн) use the nearest matching
+    local date, including today. Qualified/negated weekdays need clarification.
     """
     if not isinstance(reference, datetime) or reference.utcoffset() is None:
         raise ValueError("Deadline reference must be a timezone-aware datetime")
     if not isinstance(text, str):
         raise TypeError("Deadline evidence must be text")
     value = " ".join(text.casefold().split())
-    if not value or "?" in value or _UNCERTAIN.search(value) or _WEEKDAY.search(value):
+    if not value or "?" in value or _UNCERTAIN.search(value):
         return None
+
+    weekdays = list(_EXPLICIT_WEEKDAY.finditer(value))
+    if _WEEKDAY.search(_EXPLICIT_WEEKDAY.sub(' ', value)):
+        return None
+    if weekdays:
+        assertion = re.sub(r'\bне\s+забуд(?:ь|ьте)\b', '', value)
+        if (_NEGATED_WEEKDAY.search(assertion) or _INCOMPLETE_ALTERNATIVE.search(value)
+                or any(_TRAILING_WEEKDAY_QUALIFIER.match(value[m.end():]) for m in weekdays)):
+            return None
 
     candidates: set[date] = set()
     remaining = value
@@ -121,6 +154,9 @@ def resolve_deadline(text: str, reference: datetime) -> str | None:
         return None
 
     try:
+        for match in weekdays:
+            offset = (_WEEKDAY_FORMS[match['day']] - reference.weekday()) % 7
+            candidates.add(reference.date() + timedelta(days=offset))
         for match in _RELATIVE.finditer(value):
             offset = {"сегодня": 0, "завтра": 1, "послезавтра": 2}[match.group(1)]
             candidates.add(reference.date() + timedelta(days=offset))

@@ -177,7 +177,7 @@ def test_admin_completion_cancels_unsent_assignment_and_reminder(team):
 
 def test_unresolved_deadline_does_not_send_redundant_employee_instruction(team):
     engine,store,config,clock,api=team;task=confirm(team,create(team))
-    process(team,'Задача №1: перенеси срок на пятницу.',12,
+    process(team,'Задача №1: перенеси срок на следующую пятницу.',12,
             result([update(task,deadline='2099-01-01',deadline_lines=[1])]))
     assert engine.tasks()[0]['deadline']==task['deadline']
     assert len(store.rows("SELECT id FROM outbox WHERE dedupe LIKE 'assignment:%'"))==1

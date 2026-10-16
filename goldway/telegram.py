@@ -105,6 +105,11 @@ class Dispatcher:
                 route,transport=self.route(row['recipient'],row['preferred_transport'])
                 with self.s.transaction():
                     if row['dedupe'].startswith('deadline-policy:') and not permit_delivery(self.s,self.c,row,self.now()):continue
+                    # A policy guard may rebuild the body after route looked up rights.
+                    if row['dedupe'].startswith('deadline-policy:'):
+                        row=dict(self.s.execute('SELECT * FROM outbox WHERE business=? AND id=?',(self.b,row['id'])).fetchone())
+                        if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
+                            raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
                     claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
                 if not claimed: continue
                 params=dict(route,text=row['text'])

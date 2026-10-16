@@ -162,7 +162,7 @@ def test_unknown_task_number_never_changes_existing_task(personal):
 
 def test_ambiguous_new_deadline_preserves_existing_fact(personal):
     e,s,c,clock=personal;task=make_task(personal)
-    text='Задача №1: перенеси срок на пятницу.'
+    text='Задача №1: перенеси срок на следующую пятницу.'
     e.model=ScriptedModel(result([{'op':'update','task_id':task['id'],'deadline':'2099-01-01','deadline_lines':[1],'evidence_lines':[1]}]))
     e.reply('change','test_operator',text,channel='bot');e.process('change')
     assert e.tasks()[0]['deadline']==task['deadline']
@@ -180,7 +180,7 @@ def test_completed_result_survives_unclear_deadline_update(personal):
     done='Задача №1: список из трёх пунктов подготовлен в TEST.txt.'
     e.model=ScriptedModel(result([{'op':'update','task_id':task['id'],'status':'completed','evidence':done}]))
     e.reply('done','test_operator',done,channel='bot');e.process('done')
-    text='Задача №1: перенеси срок на пятницу.'
+    text='Задача №1: перенеси срок на следующую пятницу.'
     e.model=ScriptedModel(result([{'op':'update','task_id':task['id'],'deadline':'2099-01-01','deadline_lines':[1],'evidence_lines':[1]}]))
     e.reply('ambiguous','test_operator',text,channel='bot');e.process('ambiguous')
     assert e.tasks()[0]['evidence']==done and e.tasks()[0]['deadline']==task['deadline']
