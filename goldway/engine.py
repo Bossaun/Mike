@@ -33,6 +33,10 @@ class Engine:
             from .scheduling import Scheduler
             self.scheduler = Scheduler(store, config, now=now, permitted=self._scheduling_permitted,
                                        spawn=self._spawn_recurring)
+        self.deadline_policy = None
+        from .deadline_policy import enabled, DeadlinePolicy
+        if enabled(config):
+            self.deadline_policy = DeadlinePolicy(store, config, now, permitted=self._scheduling_permitted)
 
     def _scheduling_permitted(self, task_id, recipient, at):
         task = self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?', (self.b, task_id)).fetchone()
@@ -634,6 +638,8 @@ class Engine:
         with self.s.transaction():
             if self.scheduler:
                 self.scheduler.tick()
+            if self.deadline_policy:
+                self.deadline_policy.tick()
             for t in self.tasks():
                 if t['status'] in ('proposed','completed'): continue
                 if self.scheduler and self.scheduler.suppress_generic(t['id']): continue

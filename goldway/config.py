@@ -6,6 +6,8 @@ def load(path):
     if c.get('business')!='GOLDWAY': raise ValueError('This pilot only enables GOLDWAY')
     if not c.get('admins') or not c.get('employees'): raise ValueError('Configure employees and admins')
     if any(a not in c['employees'] for a in c['admins']): raise ValueError('Admins need employee identities')
+    from .deadline_policy import validate_config as validate_deadline_policy
+    validate_deadline_policy(c)
     if 'scheduling' in c:
         scheduling = c['scheduling']
         if (not isinstance(scheduling, dict) or set(scheduling) != {'enabled'}

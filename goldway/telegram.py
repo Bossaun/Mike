@@ -96,11 +96,15 @@ class Dispatcher:
         for row in self.s.rows("SELECT * FROM outbox WHERE business=? AND state IN ('pending','retry','blocked') AND next_at<=? ORDER BY id LIMIT 50",(self.b,self.now())):
             if should_stop():break
             try:
+                if row['dedupe'].startswith('deadline-policy:'):
+                    from .deadline_policy import permit_delivery
+                    if not permit_delivery(self.s,self.c,row,self.now()):continue
                 from .intelligence import delivery_permitted
                 if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
                     raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
                 route,transport=self.route(row['recipient'],row['preferred_transport'])
                 with self.s.transaction():
+                    if row['dedupe'].startswith('deadline-policy:') and not permit_delivery(self.s,self.c,row,self.now()):continue
                     claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
                 if not claimed: continue
                 params=dict(route,text=row['text'])
