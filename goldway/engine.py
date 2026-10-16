@@ -156,6 +156,10 @@ class Engine:
                     from .trace_adapter import handle_trace
                     handle_trace(self, event_id, payload)
                 return added
+            from .reminder_overview import is_reminder_overview, handle_reminder_overview
+            if is_reminder_overview(text):
+                if added:handle_reminder_overview(self, event_id, payload)
+                return added
             from .agenda_command import is_agenda_command, handle_agenda
             if is_agenda_command(text):
                 if added:handle_agenda(self, event_id, payload)
