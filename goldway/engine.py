@@ -164,6 +164,10 @@ class Engine:
             if is_history_command(text):
                 if added:handle_task_history(self, event_id, payload)
                 return added
+            from .design_brief_command import is_design_brief_command, handle_design_brief
+            if is_design_brief_command(text):
+                if added:handle_design_brief(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
