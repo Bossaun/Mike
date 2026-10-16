@@ -41,15 +41,21 @@ for _message in (
 ):
     _VALUE_ERRORS[_message] = 'task_validation'
 
-_SAFE_CODES = frozenset('ValueError: ' + code for code in _VALUE_ERRORS.values())
+_HISTORY_CODE = 'ValueError: task_history_unavailable'
+_SAFE_CODES = frozenset('ValueError: ' + code for code in _VALUE_ERRORS.values()) | {_HISTORY_CODE}
 
 
 def event_error(exc):
-    """Classify fixed ValueErrors; unknown exceptions expose their class only."""
+    """Classify exact source-owned errors; unknown exceptions expose class only."""
     if type(exc) is ValueError and len(exc.args) == 1 and type(exc.args[0]) is str:
         code = _VALUE_ERRORS.get(exc.args[0])
         if code:
             return 'ValueError: ' + code
+    # Lazy import keeps errors independent of the Engine/history import chain.
+    from .task_transition_history import HistoryError
+    if (type(exc) is HistoryError and len(exc.args) == 1
+            and type(exc.args[0]) is str and exc.args[0] == 'task_history_unavailable'):
+        return _HISTORY_CODE
     return type(exc).__name__
 
 

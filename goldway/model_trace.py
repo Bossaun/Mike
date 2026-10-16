@@ -53,6 +53,7 @@ class SafeReason(Enum):
     KNOWLEDGE_CITATIONS='knowledge_citations'; KNOWLEDGE_PERMISSION='knowledge_permission'
     WORK_EVIDENCE_CHANGED='work_evidence_changed'; CITATION_BUDGET='citation_budget'
     PROVENANCE_BUDGET='provenance_budget'; TASK_VALIDATION='task_validation'
+    TASK_HISTORY_UNAVAILABLE='task_history_unavailable'
 
 
 def _enum(value, cls):
