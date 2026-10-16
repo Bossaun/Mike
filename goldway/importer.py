@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from urllib.parse import quote
 from .engine import fingerprint
+from .task_transition_history import append_transition
 
 LEGACY_HEADERS=['ID','Задача','Ответственный','Подтвержденное состояние','Следующее действие',
                 'Критерий готовности','Статус','Срок / период','Доказательство / ссылка','Комментарий']
@@ -57,6 +58,7 @@ def import_tasks(engine,rows,source,apply=False):
                 (engine.b,source_id,json.dumps(t['raw'],ensure_ascii=False),source+f' (строка {t["row"]})'))
             engine.s.execute('INSERT INTO tasks(business,id,title,owner,deadline,next_step,criterion,status,source_id,evidence,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (engine.b,id,t['title'],t['owner'],t['deadline'],t['next_step'],t['criterion'],t['status'],source_id,t['evidence'],engine.now()))
+            append_transition(engine.s,engine.b,id,None,at=engine.now(),source='import',creation='import')
             engine.s.execute('INSERT INTO task_sources VALUES(?,?,?)',(engine.b,id,source_id))
             engine.s.audit(engine.b,'legacy_import',{'task':id,'legacy_id':t['legacy_id'],'issues':t['issues']},engine.now())
             added+=1

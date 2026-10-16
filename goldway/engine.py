@@ -12,6 +12,7 @@ FIELDS = {'title','owner','deadline','next_step','criterion','status','evidence'
 REFERENCE_PATTERN = r'(?:№|#|задач[ауеи]?\s*)(?:\s*№)?\s*(\d+)'
 from .conversation import basic_reply, is_general
 from .errors import event_error
+from .task_transition_history import start_observing, snapshot as history_snapshot, append_transition, source_kind as history_source_kind
 
 class ClarificationRequired(ValueError):
     def __init__(self,reason,notice=None):
@@ -28,6 +29,8 @@ class Engine:
         from .intelligence import Intelligence, intelligence_enabled
         self.intelligence = Intelligence(store, config) if intelligence_enabled(config) else None
         self.tz = ZoneInfo(config.get('timezone','Europe/Moscow'))
+        with nullcontext() if store.db.in_transaction else store.transaction():
+            start_observing(store, self.b, at=self.now(), timezone_name=self.tz.key)
         self.scheduler = None
         if isinstance(config.get('scheduling'), dict) and config['scheduling'].get('enabled') is True:
             from .scheduling import Scheduler
@@ -79,6 +82,7 @@ class Engine:
             VALUES(?,?,?,?,?,?,?,'confirmed',?,?,?)''',
             (self.b, task_id, template['title'], template['owner'], deadline, template['next_step'],
              template['criterion'], template['source_id'], template['evidence'], self.now()))
+        append_transition(self.s, self.b, task_id, None, at=self.now(), source='recurring', creation='recurring')
         for source_id in template['source_ids']:
             self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)', (self.b, task_id, source_id))
         if self.s.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='intelligence_task_acl'").fetchone():
@@ -595,6 +599,7 @@ class Engine:
             id=uuid.uuid4().hex[:12]
             self.s.execute('INSERT INTO tasks(business,id,title,owner,deadline,next_step,criterion,status,source_id,evidence,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (self.b,id,a['title'],a.get('owner'),a.get('deadline'),a['next_step'],a['criterion'],a['status'],source,evidence,self.now()))
+            append_transition(self.s, self.b, id, None, at=self.now(), source=history_source_kind(kind,p), creation='new')
         else:
             id=a.get('task_id')
             old=next((t for t in context['tasks'] if t['id']==id),None)
@@ -636,8 +641,10 @@ class Engine:
             if not values:
                 self.s.execute('INSERT OR IGNORE INTO task_sources VALUES(?,?,?)',(self.b,id,source))
                 return id
+            before_history=history_snapshot(self.s,self.b,id)
             sql=','.join(f'{k}=?' for k in values)
             self.s.execute(f'UPDATE tasks SET {sql},revision=revision+1 WHERE business=? AND id=?',(*values.values(),self.b,id))
+            append_transition(self.s,self.b,id,before_history,at=self.now(),source=history_source_kind(kind,p))
             if self._closed_team() and any(k in values and values[k]!=old[k] for k in ('title','owner','deadline','next_step','criterion','status')):
                 self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'assignment:%'",(self.b,id))
                 self.s.execute("UPDATE outbox SET state='cancelled' WHERE business=? AND task_id=? AND state IN ('pending','retry','blocked') AND dedupe LIKE 'attention:%'",(self.b,id))

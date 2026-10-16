@@ -2,6 +2,7 @@
 import json
 from datetime import date
 from .engine import STATUSES
+from .task_transition_history import snapshot as history_snapshot, append_transition
 
 HEADERS=['ID','Задача','Ответственный','Срок_ISO','Следующий_шаг','Критерий','Статус','Источник','Версия','Результат']
 EDITABLE={1:'title',2:'owner',3:'deadline',4:'next_step',5:'criterion',6:'status',9:'evidence'}
@@ -71,8 +72,10 @@ class Sheets:
             if len(evidence)<12 or 'почти' in evidence.casefold(): raise ValueError('Concrete new result required')
         if not changes: return
         with self.s.transaction():
+            before_history=history_snapshot(self.s,self.e.b,t['id'])
             sql=','.join(f'{k}=?' for k in changes)
             self.s.execute(f'UPDATE tasks SET {sql},revision=revision+1 WHERE business=? AND id=?',(*changes.values(),self.e.b,t['id']))
+            append_transition(self.s,self.e.b,t['id'],before_history,at=self.e.now(),source='sheet')
             self.s.audit(self.e.b,'sheet_manual_change',{'task':t['id'],'fields':list(changes)},self.e.now())
 
     def has_record(self,tab,record_id):

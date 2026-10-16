@@ -45,6 +45,27 @@ CREATE TABLE IF NOT EXISTS sheet_snapshots(
 CREATE TABLE IF NOT EXISTS audit(
  id INTEGER PRIMARY KEY, business TEXT NOT NULL, at REAL NOT NULL, kind TEXT NOT NULL,
  detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS task_history_observation(
+ business TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+ started_at REAL NOT NULL, timezone_name TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS task_status_history(
+ business TEXT NOT NULL, task_ref TEXT NOT NULL, task_number INTEGER NOT NULL,
+ revision INTEGER NOT NULL, observed_at REAL NOT NULL, task_origin TEXT NOT NULL, history_quality TEXT NOT NULL,
+ source_kind TEXT NOT NULL, is_completion_transition INTEGER NOT NULL,
+ before_revision INTEGER, before_status TEXT, status TEXT NOT NULL,
+ before_owner_state TEXT, before_owner_ref TEXT, owner_state TEXT NOT NULL, owner_ref TEXT,
+ before_deadline_state TEXT, before_deadline TEXT, before_deadline_hash TEXT,
+ deadline_state TEXT NOT NULL, deadline TEXT, deadline_hash TEXT,
+ PRIMARY KEY(business,task_ref,revision));
+CREATE INDEX IF NOT EXISTS task_status_history_period ON task_status_history(business,observed_at);
+CREATE TRIGGER IF NOT EXISTS task_status_history_no_update BEFORE UPDATE ON task_status_history
+ BEGIN SELECT RAISE(ABORT,'task_history_append_only'); END;
+CREATE TRIGGER IF NOT EXISTS task_status_history_no_delete BEFORE DELETE ON task_status_history
+ BEGIN SELECT RAISE(ABORT,'task_history_append_only'); END;
+CREATE TRIGGER IF NOT EXISTS task_history_observation_no_update BEFORE UPDATE ON task_history_observation
+ BEGIN SELECT RAISE(ABORT,'task_history_append_only'); END;
+CREATE TRIGGER IF NOT EXISTS task_history_observation_no_delete BEFORE DELETE ON task_history_observation
+ BEGIN SELECT RAISE(ABORT,'task_history_append_only'); END;
 CREATE TABLE IF NOT EXISTS pending_members(
  business TEXT NOT NULL, user_id TEXT NOT NULL, label TEXT NOT NULL, first_seen REAL NOT NULL,
  PRIMARY KEY(business,user_id));
