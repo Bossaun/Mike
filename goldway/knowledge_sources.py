@@ -103,7 +103,8 @@ class ReadOnlySources:
     Status contains codes, never remote bodies, credentials or private titles.
     """
     def __init__(self, index, specs, members, *, client=None, google_credentials=None,
-                 refresh_seconds=900, max_bytes=524288):
+                 refresh_seconds=900, max_bytes=524288, trusted_registry=None,
+                 trusted_sources=(), business=None):
         if not isinstance(specs, list) or len(specs) > 16:
             raise ValueError('At most sixteen explicitly registered sources')
         if type(refresh_seconds) is not int or not 60 <= refresh_seconds <= 3600:
@@ -116,6 +117,16 @@ class ReadOnlySources:
         if (len(ids) != len(specs) or any(not isinstance(v, str) or not v for v in ids)
                 or len(ids) != len(set(ids))):
             raise ValueError('Unique explicit source identifiers required')
+        self.trusted_bridge = None
+        if trusted_registry is not None:
+            from .trusted_source_bridge import TrustedSourceBridge
+            self.trusted_bridge = TrustedSourceBridge(index, trusted_registry, trusted_sources,
+                                                     business=business, members=self.members)
+            local_ids = {self.trusted_bridge.source_id(spec) for spec in trusted_sources}
+            if len(ids) + len(local_ids) > 16 or local_ids & set(ids):
+                raise ValueError('Trusted sources overlap or exceed registered source limit')
+        elif trusted_sources:
+            raise ValueError('Trusted sources require an explicitly injected registry')
 
     def _get(self, client, url, *, headers=None):
         _https(url)
@@ -246,13 +257,16 @@ class ReadOnlySources:
 
     def refresh(self, now, *, force=False):
         owned = self.client is None
-        client = self.client or httpx.Client()
+        client = self.client
         try:
+            if self.trusted_bridge is not None:
+                self.status.update(self.trusted_bridge.refresh(now))
             for spec in self.specs:
                 source = spec['id']
                 if not force and now < self.next_refresh.get(source, 0): continue
                 self.next_refresh[source] = now + self.interval
                 try:
+                    if client is None: client = httpx.Client()
                     documents = self.documents(client, spec, now)
                     if len(documents) > 128: raise SourceBlocked('Source document cap')
                     if documents:
@@ -273,5 +287,5 @@ class ReadOnlySources:
                         pass
                     self.status[source] = 'blocked' if isinstance(exc, SourceBlocked) else 'unavailable'
         finally:
-            if owned: client.close()
+            if owned and client is not None: client.close()
         return dict(self.status)
