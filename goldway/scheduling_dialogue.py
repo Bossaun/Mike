@@ -10,7 +10,7 @@ from .reminder_times import resolve_recurrence, resolve_reminder_at
 _REQUEST = re.compile(r'^(?:пожалуйста[, ]+)?(?:напомни(?:те)?|напоминай(?:те)?|спроси(?:те)?|вернись)\b')
 _PROMISE = re.compile(r'^(?:я\s+)?(?:сделаю|закончу|завершу|отправлю|подготовлю|выполню)\b')
 _NOT_DONE = re.compile(r'^(?:я\s+)?(?:(?:пока|ещ[её])\s+)?(?:нет|не\s+(?:сделал[а]?|готов[оа]?|закончил[а]?|успел[а]?))\s*[.!]?$', re.I)
-_CANCEL = re.compile(r'^(?:пожалуйста[, ]+)?(?:отмени(?:те)?|убери(?:те)?|сними(?:те)?)\s+(?:это\s+)?(?:напоминание|регулярную\s+задачу|повторение)\b')
+_CANCEL = re.compile(r'^(?:пожалуйста[, ]+)?(?:отмени(?:те)?|убери(?:те)?|сними(?:те)?)\s+(?:это\s+)?(?P<target>напоминание|регулярную\s+задачу|повторение)\b')
 _BARE_TIME = re.compile(r'^(?:через\b|(?:сегодня|завтра|послезавтра)\s+в\b|\d{1,2}:\d{2}\b)')
 
 
@@ -61,6 +61,17 @@ def _one_task(engine, payload, context, recent):
     return candidates[0]['id'] if len(candidates) == 1 else None
 
 
+def _active_series(engine, task_id):
+    # An occurrence card has its own task ID; retain the original series link.
+    rows = engine.s.rows("""SELECT id FROM c07_series
+        WHERE business=? AND state='active' AND (task_id=? OR id IN (
+        SELECT series_id FROM c07_occurrences WHERE business=? AND task_id=?))""",
+        (engine.b, task_id, engine.b, task_id))
+    if len(rows) > 1:
+        raise ValueError('Recurring cancellation target is ambiguous')
+    return rows[0] if rows else None
+
+
 def handle_scheduling(engine, event_id, payload, context, scope):
     """Return true only for a recognized scheduling turn, persisted atomically."""
     if not engine.scheduler or not engine._task_dialogue_turn(payload, 'reply'):
@@ -71,7 +82,10 @@ def handle_scheduling(engine, event_id, payload, context, scope):
     lead = re.sub(r'^пожалуйста[, ]+', '', lead)
     if '?' in lead or re.match(r'^напомни(?:те)?[, ]+(?:как[а-яё]*|котор[а-яё]*|что|когда|почему|зачем|кто|сколько|чем|пример)\b', lead):
         return False
-    request, cancel = bool(_REQUEST.match(lead)), bool(_CANCEL.match(lead))
+    request = bool(_REQUEST.match(lead))
+    cancel_match = _CANCEL.match(lead)
+    cancel = bool(cancel_match)
+    cancel_series = cancel and cancel_match.group('target') != 'напоминание'
     recent = _recent_prompt(engine, payload)
     promise = bool(_PROMISE.match(lead)) or bool(re.match(r'^(?:я\s+)?ещ[её]\s+не\s+сделал[а]?[,.; ]+(?:я\s+)?сделаю\b', lead))
     short_time = bool(recent and _BARE_TIME.match(lead))
@@ -97,7 +111,7 @@ def handle_scheduling(engine, event_id, payload, context, scope):
         first = engine.s.execute('SELECT COALESCE(MAX(id),0) FROM outbox').fetchone()[0]
         if not task:
             notice = 'О какой задаче напомнить? Назовите её или ответьте на её карточку.'
-        elif task['status'] in ('completed', 'proposed') and not (cancel and re.search(r'регулярную|повторение', lead)):
+        elif task['status'] in ('completed', 'proposed') and not cancel_series:
             notice = 'Для напоминания нужна подтверждённая незавершённая задача.'
         elif not task['owner']:
             notice = 'Кто отвечает за эту задачу?'
@@ -107,8 +121,8 @@ def handle_scheduling(engine, event_id, payload, context, scope):
             engine.s.execute('SAVEPOINT c07_dialogue_action')
             try:
                 if cancel:
-                    if re.search(r'регулярную|повторение', lead):
-                        row = engine.s.execute("SELECT id FROM c07_series WHERE business=? AND task_id=? AND state='active'", (engine.b, task_id)).fetchone()
+                    if cancel_series:
+                        row = _active_series(engine, task_id)
                         changed = engine.scheduler.pause_series(row['id'], payload['sender'], event_id) if row else False
                     else:
                         changed = engine.scheduler.cancel_check(task_id, payload['sender'], event_id)

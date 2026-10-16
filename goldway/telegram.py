@@ -32,12 +32,18 @@ class Telegram:
 
     def document(self, file_id):
         file=self.call('getFile',file_id=file_id)
-        if file.get('file_size',0)>64000: raise ValueError('Transcript document limit: 64KB')
+        if type(file.get('file_size')) is not int or not 0 < file['file_size'] <= 64000:
+            raise ValueError('Transcript document limit: 64KB')
         try:
-            r=self.client.get(self.base.replace('/bot','/file/bot')+file['file_path'])
-            r.raise_for_status()
-            if len(r.content)>64000: raise ValueError('Transcript document too large')
-            return r.content.decode('utf-8-sig')
+            with self.client.stream('GET',self.base.replace('/bot','/file/bot')+file['file_path']) as r:
+                r.raise_for_status()
+                body=bytearray()
+                for chunk in r.iter_bytes(chunk_size=64001):
+                    body.extend(chunk)
+                    if len(body)>64000: raise ValueError('Transcript document too large')
+            text=body.decode('utf-8-sig')
+            if not text.strip(): raise ValueError('Empty transcript document')
+            return text
         except httpx.HTTPError:
             raise RuntimeError('Telegram document download failed') from None
 
@@ -208,19 +214,25 @@ class Updates:
             doc=m['document']
             if not doc.get('file_name','').lower().endswith('.txt') or doc.get('file_size',0)>64000: return
             text=self.api.document(doc['file_id'])
+            if 'team_intake' in self.c and len(text)>self.c.get('max_transcript_chars',32000):
+                self.s.queue(b,sender,
+                    'Текст планёрки слишком большой. Разделите его на отдельные части и отправьте каждую отдельным файлом .txt.',
+                    f"attachment-limit:{update['update_id']}:{sender}",self.e.now(),
+                    preferred_transport='business' if conn else 'bot')
+                return
         if not text: return
-        if text.startswith('/'):
+        if not m.get('document') and text.startswith('/'):
             head,*rest=text.split(' ',1)
             if '@' in head:
                 command,target=head.split('@',1)
                 if self.c.get('bot_username') and target.casefold()!=self.c['bot_username'].casefold():return
                 text=command+(' '+rest[0] if rest else '')
-        elif self.c.get('bot_username'):
+        elif not m.get('document') and self.c.get('bot_username'):
             text=text.replace('@'+self.c['bot_username'],'').strip()
-        if not self.e.intelligence and text.casefold() in ('привет','здравствуйте','добрый день','hello'):
+        if not m.get('document') and not self.e.intelligence and text.casefold() in ('привет','здравствуйте','добрый день','hello'):
             self.s.queue(b,sender,'Привет! Пишите обычным текстом: задайте вопрос, предложите идею, пришлите планёрку или сообщите результат работы. Если нужно уточнить задачу, назовите её или ответьте на карточку. Команды не нужны.',f"hello:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
-        if text=='/start':
+        if not m.get('document') and text=='/start':
             self.s.queue(b,sender,'Вы подключены к помощнику GOLDWAY. Можно общаться обычным текстом, прислать идею или планёрку. Например: «Как идут наши задачи?» или «Есть идея улучшить упаковку». Команды не нужны.',f"start:{update['update_id']}:{sender}",self.e.now(),preferred_transport='business' if conn else ('bot' if m['chat']['type']=='private' else 'group'))
             return
         source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
@@ -237,9 +249,9 @@ class Updates:
                 (b,sender,str(parent.get('message_id')), 'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'),str(m['chat']['id']),conn or '',(m.get('message_thread_id') or 0) if m.get('message_thread_id')!=1 else 0)).fetchone()
             task_id=row[0] if row else None
         personal_operator=self.e._task_dialogue_turn({'sender':sender,'channel':'business' if conn else ('bot' if m['chat']['type']=='private' else 'group')},'reply')
-        if sender in self.c['admins'] and (text.strip()=='/summary' or text.casefold().strip() in ('сводка','дай сводку','покажи задачи','список задач','что по задачам','итоги планёрки')):
+        if not m.get('document') and sender in self.c['admins'] and (text.strip()=='/summary' or text.casefold().strip() in ('сводка','дай сводку','покажи задачи','список задач','что по задачам','итоги планёрки')):
             self.e.queue_summary(f"request:{update['update_id']}")
-        elif sender in self.c['admins'] and (text.startswith('/meeting ') or (not personal_operator and not parent and (m.get('document') or (len(text)>400 or any(text.casefold().startswith(person['name'].casefold()+':') for person in self.c['employees'].values()) or any(text.startswith(label+':') for label in self.c.get('speaker_aliases',{}))) and not text.startswith('/') and not self.e.reference_ids(text)))):
+        elif not ('team_intake' in self.c and m.get('document')) and sender in self.c['admins'] and (text.startswith('/meeting ') or (not personal_operator and not parent and (m.get('document') or (len(text)>400 or any(text.casefold().startswith(person['name'].casefold()+':') for person in self.c['employees'].values()) or any(text.startswith(label+':') for label in self.c.get('speaker_aliases',{}))) and not text.startswith('/') and not self.e.reference_ids(text)))):
             self.e.transcript(text.removeprefix('/meeting '),source)
         else:
             self.e.reply(f"update:{update['update_id']}",sender,text,task_id,source,'business' if conn else ('bot' if m['chat']['type']=='private' else 'group'),message_at=m.get('date'))

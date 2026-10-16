@@ -74,7 +74,10 @@ def accepts_team(update, config, now):
     if set(update) != {'update_id', kind}:
         return False
     message = update[kind]
-    allowed = TEXT_FIELDS | {'reply_to_message'} | ({'business_connection_id'} if business else set())
+    attachment = isinstance(message, dict) and 'document' in message
+    content_fields = ({'message_id', 'date', 'chat', 'from', 'document', 'caption', 'caption_entities'}
+                      if attachment else TEXT_FIELDS | {'reply_to_message'})
+    allowed = content_fields | ({'business_connection_id'} if business else set())
     if (not isinstance(message, dict) or not set(message) <= allowed
             or not isinstance(message.get('from'), dict)):
         return False
@@ -84,16 +87,27 @@ def accepts_team(update, config, now):
             or (business and (sender == account or not isinstance(conn, str) or not conn))):
         return False
 
-    def fresh_text(part, fields):
+    if attachment:
+        admin_ids = {config['employees'][key]['telegram_user_id'] for key in config['admins']}
+        doc = message['document']
+        if (sender not in admin_ids or not isinstance(doc, dict)
+                or not isinstance(doc.get('file_id'), str) or not doc['file_id'].strip()
+                or not isinstance(doc.get('file_name'), str) or not doc['file_name'].lower().endswith('.txt')
+                or type(doc.get('file_size')) is not int or not 0 < doc['file_size'] <= 64000
+                or ('caption' in message and (not isinstance(message['caption'], str) or len(message['caption']) > 1024))
+                or ('caption_entities' in message and not isinstance(message['caption_entities'], list))):
+            return False
+
+    def fresh_text(part, fields, is_attachment=False):
         return (isinstance(part, dict) and set(part) <= fields
                 and type(part.get('message_id')) is int and part['message_id'] > 0
                 and type(part.get('date')) is int and start <= part['date'] <= now
                 and isinstance(part.get('chat'), dict) and part['chat'].get('type') == 'private'
                 and type(part['chat'].get('id')) is int and part['chat']['id'] == sender
                 and isinstance(part.get('from'), dict)
-                and isinstance(part.get('text'), str) and bool(part['text'].strip()))
+                and (is_attachment or (isinstance(part.get('text'), str) and bool(part['text'].strip()))))
 
-    if not fresh_text(message, allowed) or message['from'].get('is_bot', False):
+    if not fresh_text(message, allowed, attachment) or message['from'].get('is_bot', False):
         return False
     parent = message.get('reply_to_message')
     if parent is None:

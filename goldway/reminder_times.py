@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 _UTC = timezone.utc
 _TIME = re.compile(r"(?<![\w:])\d{1,2}:\d{2}(?![\w:\d])")
 _TIME_LIKE = re.compile(r"\d+\s*:\s*\d+")
+_MOSCOW_QUALIFIER = re.compile(r"\b(?:по\s+москве|мск)\b(?![\w+-])")
 _UNSUPPORTED_CLOCK_QUALIFIER = re.compile(
     r"\b(?:utc|gmt|мск|[ap]m)\b|\bпо\s+(?:москве|московскому)\b|"
     r"\b[A-Za-z_]+/[A-Za-z_]+\b|\d:\d{2}\s*(?:утра|вечера|ночи|дня)\b|"
@@ -86,6 +87,19 @@ def _evidence(text: str, reference: datetime) -> str | None:
     if not isinstance(text, str):
         raise TypeError("Reminder evidence must be text")
     value = " ".join(text.casefold().replace("ё", "е").split())
+    moscow = list(_MOSCOW_QUALIFIER.finditer(value))
+    if moscow:
+        # This is confirmation of the configured zone, never a zone conversion.
+        # Keep the qualifier unsupported for equal-offset/aliased zones too.
+        if (not isinstance(reference.tzinfo, ZoneInfo)
+                or reference.tzinfo.key != 'Europe/Moscow'
+                or len(moscow) != 1
+                or re.search(r'\b(?:не|ни)\s+(?:в\s+)?(?:по\s+москве|мск)\b', value)
+                or re.match(r'\s*[+-]\s*\d', value[moscow[0].end():])
+                or re.search(r'(?<!\w)[+-]\s*\d{1,2}(?::\d{2})?\s*$',
+                             value[:moscow[0].start()])):
+            return None
+        value = _MOSCOW_QUALIFIER.sub(' ', value)
     if (not value or "?" in value or _UNCERTAIN.search(value) or
             _NEGATED_TIME.search(value) or _UNSUPPORTED_CLOCK_QUALIFIER.search(value)):
         return None
