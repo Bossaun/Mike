@@ -19,7 +19,11 @@ def task_card(task,config):
     if task.get('criterion'):parts.append('✅ Готово, когда: '+clean(task['criterion'],180))
     return '\n'.join(parts)
 
-def meeting_messages(tasks,config):
+def meeting_messages(tasks,config,*,review=None):
+    if review is not None:
+        if list(tasks):raise ValueError("structured_review_requires_no_legacy_tasks")
+        from .meeting_review_render import render_meeting_review
+        return render_meeting_review(review,config)
     tasks=list(tasks)
     if not tasks:return ['<b>📋 GOLDWAY · итог планёрки</b>\nНовых поручений не выделено.']
     unknown=sum(not t.get('owner') for t in tasks);undated=sum(not t.get('deadline') for t in tasks)

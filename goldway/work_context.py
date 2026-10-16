@@ -1,8 +1,9 @@
 """Read-only, bounded projections of currently authorized task records.
 
 The records establish that tasks exist, not that a business diagnosis is true.
-Callers supply fresh document grants; this module never reads message bodies,
-source bodies, external documents, or historical task snapshots.
+Callers supply fresh document grants. Ordinary overviews never read source
+bodies; an explicit result question can select one bounded registered span.
+Neither route reconstructs historical task snapshots.
 """
 
 import hashlib
@@ -11,6 +12,8 @@ import math
 import re
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .task_result_context import RESULT_LIMITATION, registered_result, result_request
 
 
 WORK_PREFIX = 'work-task:'
@@ -184,6 +187,27 @@ def _project(ref, row, records, acl, config, sender, role, now, *, snapshot=True
     return item, rank
 
 
+def _project_result(store, ref, row, records, acl, config, sender, role, now):
+    if (row['status'] != 'completed' or not isinstance(row['id'], str)
+            or not 0 < len(row['id']) <= 160 or type(row['public_number']) is not int
+            or not 1 <= row['public_number'] <= 999999999):
+        return None
+    found = registered_result(store, config['business'], row['id'], row['revision'])
+    if found is None:
+        return None
+    result, fingerprint = found
+    digest = _digest(ref, records, acl, config, sender, role)
+    return {
+        'id': ref, 'source_kind': 'task', 'task_id': row['id'],
+        'public_number': row['public_number'], 'title': _bounded(row['title'], 180),
+        'status': 'completed', 'deadline': _deadline(row['deadline'], config, now)[0],
+        'owner': _owner(config, row['owner']), 'proposal': False, 'signals': [],
+        'confirmed': True, 'confirmation_scope': 'registered_result_only',
+        'registered_result': result, 'observed_at': now, 'updated_at': None,
+        'snapshot_digest': hashlib.sha256((digest + fingerprint).encode()).hexdigest(),
+    }
+
+
 def collect_work_context(store, config, sender, readable_ids, now, query):
     """Project at most five open task records, with at most 6000 JSON characters.
 
@@ -197,10 +221,22 @@ def collect_work_context(store, config, sender, readable_ids, now, query):
               'audience_scope': {'admin': 'admin_visible', 'employee': 'own_tasks_only'}.get(role, 'unregistered'),
               'as_of': now, 'limited': True,
               'limitation': 'Current accessible task records only; not a complete business assessment.'}
+    asked_result, number = result_request(query)
+    asked_result = asked_result and is_operational_query(query)
+    if asked_result:
+        result.update(scope='current_authorized_registered_task_result', limitation=RESULT_LIMITATION)
     if role is None:
         return result
     records, acl = _records(store, config['business'])
     permitted = _readable(records, acl, role, sender, readable_ids) & _ids(readable_ids)
+    if asked_result:
+        selected = [ref for ref in permitted if records[ref]['public_number'] == number]
+        if number is not None and len(selected) == 1:
+            ref = selected[0]
+            item = _project_result(store, ref, records[ref], records, acl, config, sender, role, now)
+            if item and len(json.dumps([item], ensure_ascii=False)) <= MAX_EVIDENCE_CHARS:
+                result.update(evidence=[item], status='grounded')
+        return result
     ranked = []
     for ref in permitted:
         item, rank = _project(ref, records[ref], records, acl, config, sender, role, now, snapshot=False)
@@ -238,6 +274,9 @@ def validate_work_snapshot(store, config, sender, readable_ids, item):
     permitted = _readable(records, acl, role, sender, readable_ids) & _ids(readable_ids)
     if ref not in permitted:
         return False
+    if item.get('confirmation_scope') == 'registered_result_only':
+        current = _project_result(store, ref, records[ref], records, acl, config, sender, role, now)
+        return current is not None and current == item
     current, _ = _project(ref, records[ref], records, acl, config, sender, role, now)
     return current is not None and current == item
 
@@ -259,6 +298,8 @@ def is_operational_query(query):
                  r'перепиш(?:и|ите|ем)|переписать|подготов(?:ь|ьте|ить|им)|'
                  r'описани\w*|реклам\w*|пост(?:а|е|ом|ы|ов)?|скрипт\w*)\b', text):
         return False
+    if result_request(query)[0]:
+        return True
     # Product, brand, and customer research are distinct from current task state.
     if re.search(r'\b(?:бренд\w*|продукт\w*|товар\w*|крем\w*|косметик\w*|'
                  r'шампун\w*|покупател\w*|клиент\w*)\b', text):
