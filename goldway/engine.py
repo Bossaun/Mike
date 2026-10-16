@@ -152,6 +152,10 @@ class Engine:
                     from .trace_adapter import handle_trace
                     handle_trace(self, event_id, payload)
                 return added
+            from .agenda_command import is_agenda_command, handle_agenda
+            if is_agenda_command(text):
+                if added:handle_agenda(self, event_id, payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
