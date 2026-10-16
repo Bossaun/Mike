@@ -343,6 +343,13 @@ class Engine:
             if kind=='reply' and 'team_intake' in self.c and is_ordinal_request(p['text']):
                 handle_ordinal_followup(self,event_id,p)
                 return
+            from .consent_anchor import guarded,resolve,clarify,ConsentAmbiguous
+            consent_anchor=None
+            if kind=='reply' and guarded(self,p):
+                try:consent_anchor=resolve(self,event_id,p)
+                except ConsentAmbiguous:
+                    with self.s.transaction():clarify(self,event_id,p)
+                    return
             if self.intelligence:self.intelligence.sources.refresh(self.now())
             context=self._context(p,kind)
             personal_operator=self._task_dialogue_turn(p,kind)
@@ -403,6 +410,13 @@ class Engine:
                 if context['kind']=='conversation' and result.get('actions'):
                     raise ValueError('General conversation cannot modify tasks')
                 self.s.audit(self.b,'deterministic_reply' if direct else 'model_proposal',{'event':event_id,'result':result},self.now())
+            if consent_anchor is not None and result.get('actions'):
+                from .consent_anchor import permit_action
+                try:
+                    for action in result['actions']:permit_action(self,p,action)
+                except ConsentAmbiguous:
+                    with self.s.transaction():clarify(self,event_id,p)
+                    return
             if intelligence:
                 if ambiguous and not general:
                     result.update(dialogue_state={k:v for k,v in context['dialogue'].items() if k!='turns'}, evidence_ids=[], knowledge_mode='not_needed')
@@ -429,6 +443,12 @@ class Engine:
                 # Re-check event after model call to guard replay by another process.
                 state=self.s.execute('SELECT state FROM events WHERE business=? AND id=?',(self.b,event_id)).fetchone()[0]
                 if state=='done': return
+                if consent_anchor is not None:
+                    try:
+                        if resolve(self,event_id,p)!=consent_anchor:raise ConsentAmbiguous()
+                    except ConsentAmbiguous:
+                        clarify(self,event_id,p)
+                        return
                 source=p.get('source_id') or event_id
                 self.s.execute('INSERT INTO sources(business,id,body,link) VALUES(?,?,?,?) ON CONFLICT(business,id) DO UPDATE SET body=excluded.body,link=excluded.link',
                                (self.b,source,p['text'],p.get('link',event_id)))
@@ -556,6 +576,8 @@ class Engine:
     def _apply(self,a,context,source,kind,p):
         if not isinstance(a,dict): raise ValueError('Invalid action')
         a=dict(a)
+        from .consent_anchor import permit_action
+        permit_action(self,p,a)
         mask=a.pop('set_fields',None)
         if mask is not None:
             if not isinstance(mask,list) or any(k not in FIELDS-{'evidence'} for k in mask): raise ValueError('Invalid update mask')

@@ -415,9 +415,11 @@ class Intelligence:
                 if task and (payload['sender'] in self.c['admins'] or
                              (task['owner']==payload['sender'] and task['status']!='proposed')):
                     state['task_id'] = task_id
+            from .consent_anchor import make_memory_anchor
+            anchor = make_memory_anchor(self.s, self.b, scope, event_id, state, own, now)
             self.memory.record(scope, event_id, payload['text'], '\n\n'.join(r['text'] for r in own),
                                state=state, evidence_ids=evidence_ids, at=now, outbox_ids=[r['id'] for r in own],
-                               context_kind='work' if context.get('work_context') else None)
+                               context_kind='work' if context.get('work_context') else None, anchor=anchor)
 
 
 def delivery_permitted(store, business, recipient, outbox_id, now, config=None):

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS outbox(
 CREATE TABLE IF NOT EXISTS deliveries(
  id INTEGER PRIMARY KEY, outbox_id INTEGER NOT NULL, at REAL NOT NULL,
  state TEXT NOT NULL, detail TEXT);
+CREATE INDEX IF NOT EXISTS consent_delivery_lookup ON deliveries(outbox_id,state,at);
 CREATE TABLE IF NOT EXISTS connections(
  business TEXT NOT NULL, id TEXT NOT NULL, enabled INTEGER NOT NULL,
  can_reply INTEGER NOT NULL, bot_user TEXT, PRIMARY KEY(business,id));

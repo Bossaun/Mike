@@ -169,7 +169,7 @@ class DialogueMemory:
         return "dialogue:v1:" + hashlib.sha256(scope.encode()).hexdigest()
 
     def _load(self, scope):
-        row = self.s.execute("SELECT value FROM runtime WHERE key=?", (self._key(scope),)).fetchone()
+        row = self.s.execute("SELECT CASE WHEN typeof(value)='text' AND length(CAST(value AS BLOB))<=1048576 THEN value END FROM runtime WHERE key=?", (self._key(scope),)).fetchone()
         if row:
             try:
                 value = json.loads(row[0])
@@ -206,7 +206,15 @@ class DialogueMemory:
             return True  # Explicit synthetic/direct insertion, not a delivery claim.
         business, sender, channel, chat, connection, thread = parts
         for identifier in record["outbox_ids"]:
-            row = self.s.execute("SELECT * FROM outbox WHERE id=?", (identifier,)).fetchone()
+            row = self.s.execute("""SELECT business,recipient,state,transport,destination_chat,
+                destination_connection,destination_thread FROM outbox WHERE id=?
+                AND typeof(business)='text' AND length(CAST(business AS BLOB))<=128
+                AND typeof(recipient)='text' AND length(CAST(recipient AS BLOB))<=128
+                AND typeof(state)='text' AND length(CAST(state AS BLOB))<=16
+                AND (transport IS NULL OR (typeof(transport)='text' AND length(CAST(transport AS BLOB))<=16))
+                AND (destination_chat IS NULL OR (typeof(destination_chat)='text' AND length(CAST(destination_chat AS BLOB))<=128))
+                AND (destination_connection IS NULL OR (typeof(destination_connection)='text' AND length(CAST(destination_connection AS BLOB))<=512))
+                AND (destination_thread IS NULL OR (typeof(destination_thread)='integer' AND destination_thread>0))""", (identifier,)).fetchone()
             if (not row or row["business"] != business or row["recipient"] != sender
                     or row["state"] != "sent" or row["transport"] != channel
                     or str(row["destination_chat"]) != chat
@@ -216,7 +224,7 @@ class DialogueMemory:
         return True
 
     def record(self, scope, event_id, user_text, assistant_text, *, state=None,
-               evidence_ids=(), at, outbox_ids=(), context_kind=None):
+               evidence_ids=(), at, outbox_ids=(), context_kind=None, anchor=None):
         if _scope_parts(scope) is None:
             return False
         if (not _label(event_id, 256) or not _timestamp(at)
@@ -231,6 +239,11 @@ class DialogueMemory:
             raise ValueError("Invalid dialogue outbox IDs")
         if context_kind not in (None, 'work'):
             raise ValueError('Invalid dialogue context kind')
+        if anchor is not None:
+            # Host-supplied metadata only; never user/model-controlled state.
+            if (type(anchor) is not dict or len(_dump(anchor)) > 4096):
+                raise ValueError('Invalid dialogue anchor')
+            anchor = json.loads(_dump(anchor))
         validated_state = self._state(state)
         receipt = "dialogue:receipt:v1:" + hashlib.sha256(_dump([scope, event_id]).encode()).hexdigest()
         with self._transaction():
@@ -242,6 +255,8 @@ class DialogueMemory:
                      "user": _clip(user_text, self.max_chars), "assistant": _clip(assistant_text, self.max_chars),
                      "state": validated_state, "evidence_ids": sorted(set(evidence_ids)),
                      "outbox_ids": sorted(set(outbox_ids))}
+            if anchor is not None:
+                entry['anchor'] = anchor
             if context_kind:
                 entry['context_kind'] = context_kind
             category = "pending" if entry["outbox_ids"] else "confirmed"
@@ -257,8 +272,28 @@ class DialogueMemory:
         if previous is None or (entry["at"], entry["sequence"]) > (previous["at"], previous["sequence"]):
             document["checkpoint"] = {k: entry[k] for k in
                 ("at", "sequence", "state", "evidence_ids", "outbox_ids")}
+            if "anchor" in entry:
+                document["checkpoint"]["anchor"] = entry["anchor"]
 
-    def get(self, scope, *, readable_ids: set, now, include_evidence=False):
+    def candidate_evidence_ids(self, scope):
+        """Bounded metadata needed to filter prospective consent, never turn text."""
+        if _scope_parts(scope) is None:
+            return set()
+        doc = self._load(scope)
+        entries = doc['confirmed'] + doc['pending'] + ([doc['checkpoint']] if doc.get('checkpoint') else [])
+        if len(entries) > self.pairs * 2 + 1:
+            raise ValueError('Dialogue metadata budget exceeded')
+        refs = set()
+        for entry in entries:
+            values = entry.get('evidence_ids')
+            if (type(values) is not list or len(values) > 16 or any(not _label(v,160) for v in values)):
+                raise ValueError('Invalid dialogue metadata')
+            refs.update(values)
+        if len(refs) > 256:
+            raise ValueError('Dialogue metadata budget exceeded')
+        return refs
+
+    def get(self, scope, *, readable_ids: set, now, include_evidence=False, include_provenance=False):
         parts = _scope_parts(scope)
         if parts is None:
             return _empty()
@@ -284,7 +319,10 @@ class DialogueMemory:
                 states.append(checkpoint)
             result = _empty()
             if states:
-                result.update(max(states, key=lambda r: (r["at"], r["sequence"]))["state"])
+                chosen = max(states, key=lambda r: (r["at"], r["sequence"]))
+                result.update(chosen["state"])
+                if include_provenance:
+                    result["_state_provenance"] = json.loads(_dump(chosen.get("anchor")))
             pairs = [[{"role": "user", "content": e["user"]},
                       {"role": "assistant", "content": e["assistant"]}] for e in entries]
             for pair in reversed(pairs):
