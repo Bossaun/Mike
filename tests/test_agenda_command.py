@@ -104,3 +104,27 @@ def test_omitted_sample_count_keeps_all_five_refs_for_delivery(case):
     assert delivery_permitted(s,'GOLDWAY','test_operator',row['id'],e.now(),e.c)
     s.execute("DELETE FROM tasks WHERE business='GOLDWAY' AND id='task4'")
     assert not delivery_permitted(s,'GOLDWAY','test_operator',row['id'],e.now(),e.c)
+
+
+@pytest.mark.parametrize(('sender','expected'),[('test_operator','explicit_request_current_task_draft'),('alen',False)])
+def test_real_general_reply_model_receives_only_current_sender_agenda_capability(case,sender,expected):
+    e,s=case
+    # This check exercises the normal model path, not the explicit command.
+    e._context=Engine._context.__get__(e,Engine)
+    e.intelligence.sources.refresh=lambda *a,**kw:None
+    observed=[]
+    class SyntheticModel:
+        def propose(self,context):
+            observed.append(dict(context['capabilities']))
+            return {'actions':[],'intent':'conversation','summary':'Synthetic capability answer',
+                    'reply_text':'Это синтетическая проверка описания возможностей.',
+                    'dialogue_state':{'topic':'','entities':[],'pending_offer':None,'task_id':None},
+                    'evidence_ids':[],'knowledge_mode':'not_needed'}
+    e.model=SyntheticModel()
+    assert e.reply('capability','test_operator' if sender=='test_operator' else 'alen','Что ты умеешь?',channel='bot')
+    e.process('capability')
+    assert len(observed)==1 and observed[0]['agenda_preview']==expected
+    assert observed[0]['automatic_agenda_dispatch'] is False
+    assert ('agenda_preview_request' in observed[0])==(expected is not False)
+    assert not s.rows('SELECT id FROM tasks')
+    assert s.execute("SELECT state FROM events WHERE id='capability'").fetchone()[0]=='done'

@@ -324,6 +324,12 @@ class Engine:
                     return
             intelligence = self.intelligence if kind=='reply' else None
             scope = intelligence.enrich(p,context,self.now()) if intelligence else None
+            if intelligence:
+                agenda_available = 'team_intake' in self.c and self._operator_turn(p, 'reply')
+                context['capabilities']['agenda_preview'] = ('explicit_request_current_task_draft' if agenda_available else False)
+                context['capabilities']['automatic_agenda_dispatch'] = False
+                if agenda_available:
+                    context['capabilities']['agenda_preview_request'] = 'Подготовь повестку следующей планёрки'
             if self.scheduler and kind == 'reply':
                 context['scheduling_enabled'] = True
                 context.setdefault('capabilities', {})['agreed_time_reminders'] = True
