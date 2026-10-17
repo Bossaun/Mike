@@ -183,6 +183,10 @@ class Engine:
             if is_design_brief_command(text):
                 if added:handle_design_brief(self, event_id, payload)
                 return added
+            from .stock_coverage_command import is_stock_coverage_command, handle_stock_coverage
+            if is_stock_coverage_command(text):
+                if added:handle_stock_coverage(self,event_id,payload)
+                return added
             from .recount_command import is_recount_command, handle_recount
             if is_recount_command(text):
                 if added:handle_recount(self, event_id, payload)
