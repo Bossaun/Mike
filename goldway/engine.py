@@ -160,6 +160,8 @@ class Engine:
             if self._closed_team() and payload.get('channel') in ('bot','business') and is_rewrite_request(text):return added
             from .ordinal_followup import is_ordinal_request
             if self._closed_team() and payload.get('channel') in ('bot','business') and is_ordinal_request(text):return added
+            from .comparison_followup import is_comparison_request
+            if self._closed_team() and payload.get('channel') in ('bot','business') and is_comparison_request(text):return added
             if text == '/trace':
                 if added:
                     from .trace_adapter import handle_trace
@@ -346,6 +348,10 @@ class Engine:
             from .ordinal_followup import is_ordinal_request, handle_ordinal_followup
             if kind=='reply' and 'team_intake' in self.c and is_ordinal_request(p['text']):
                 handle_ordinal_followup(self,event_id,p)
+                return
+            from .comparison_followup import is_comparison_request, handle_comparison_followup
+            if kind=='reply' and 'team_intake' in self.c and is_comparison_request(p['text']):
+                handle_comparison_followup(self,event_id,p)
                 return
             from .consent_anchor import guarded,resolve,clarify,ConsentAmbiguous
             consent_anchor=None

@@ -95,7 +95,8 @@ def handle_answer_rewrite(engine,event_id,payload):
     return _handle_readonly_answer(engine,event_id,payload,prepare)
 
 
-def _handle_readonly_answer(engine,event_id,payload,prepare,*,ordinal=False,notice=_UNAVAILABLE,prefix='answer-rewrite'):
+def _handle_readonly_answer(engine,event_id,payload,prepare,*,ordinal=False,comparison=False,notice=_UNAVAILABLE,prefix='answer-rewrite'):
+    if type(comparison) is not bool or (comparison and ordinal):_deny()
     def clarify():return _clarify(engine,event_id,payload,notice,prefix)
     try:_gate(engine,payload)
     except (ValueError,TypeError,KeyError):
@@ -118,6 +119,7 @@ def _handle_readonly_answer(engine,event_id,payload,prepare,*,ordinal=False,noti
         tasks=[],employees={},knowledge={'evidence':[],'facts':[],'conflicts':[],'status':'no_evidence'},
         dialogue={'turns':[],'topic':'','entities':[],'pending_offer':None,'task_id':None},
         capabilities={'answer_rewrite':'existing_answer_text_only','task_mutations':False},recent_summaries=[])
+    if comparison:context['comparison_only']=True
     # Exactly the existing request's one model call. JsonModel keeps its own
     # input/output cost reservation, context bound, provider and budget unchanged.
     result=engine.model.propose(context)
