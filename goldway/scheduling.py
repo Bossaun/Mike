@@ -392,13 +392,19 @@ class Scheduler:
                 task = self._task(check['task_id'])
                 text = (f'Какой результат по задаче «{task["title"]}»? '
                         'Что уже сделано и какой следующий шаг?')
-                if self.s.queue(self.b, check['owner'], text, self._dedupe(check),
-                                now, check['task_id']):
+                queued = self.s.queue(self.b, check['owner'], text, self._dedupe(check),
+                                      now, check['task_id'])
+                if queued:
                     self.s.execute('UPDATE tasks SET last_reminder=? WHERE business=? AND id=?',
                                    (now, self.b, check['task_id']))
                     effects['checks'].append({'task_id': check['task_id'], 'at': check['at']})
                 self.s.execute("UPDATE c07_checks SET state='fired' WHERE business=? AND id=?",
                                (self.b, check['id']))
+                if queued:
+                    from .scheduling_anchor import capture_due
+                    own = self.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?',
+                                         (self.b, self._dedupe(check))).fetchone()
+                    if own:capture_due(self, check, own[0])
             for series in self.s.rows("SELECT * FROM c07_series WHERE business=? AND state='active' ORDER BY next_at,id", (self.b,)):
                 if not self._series_live(series, now):
                     self.s.execute("UPDATE c07_series SET state='paused',reason='review_required' WHERE business=? AND id=?",

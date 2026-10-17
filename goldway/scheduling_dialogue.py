@@ -1,9 +1,7 @@
 """Narrow, deterministic scheduling requests; ordinary dialogue stays with the model."""
-import json
 import re
 from datetime import datetime
 
-from .dialogue import scope_from_payload
 from .reminder_times import resolve_recurrence, resolve_reminder_at
 
 
@@ -24,24 +22,9 @@ def recurrence_request(engine, payload):
     return resolve_recurrence(text, datetime.fromtimestamp(engine._message_time(payload), engine.tz))
 
 
-def _recent_prompt(engine, payload):
-    """Short answers can bind only to a delivered prompt in this exact chat."""
-    scope = scope_from_payload(payload, engine.b)
-    if not scope:
-        return None
-    _, _, channel, chat, connection, thread = json.loads(scope.split(':', 2)[2])
-    rows = engine.s.rows("""SELECT * FROM outbox WHERE business=? AND recipient=?
-        AND state='sent' AND transport=? AND destination_chat=?
-        AND destination_connection IS ? AND destination_thread IS ?
-        ORDER BY id DESC LIMIT 1""", (engine.b, payload['sender'], channel, chat, connection, thread))
-    if not rows:
-        return None
-    row = rows[0]
-    if (row['created'] > engine._message_time(payload) or
-            engine._message_time(payload) - row['created'] > 24 * 3600 or
-            not row['dedupe'].startswith('reminder:')):
-        return None
-    return row['task_id']
+def _recent_prompt(engine, payload, event_id):
+    from .scheduling_anchor import resolve
+    return resolve(engine, event_id, payload)
 
 
 def _one_task(engine, payload, context, recent):
@@ -53,12 +36,10 @@ def _one_task(engine, payload, context, recent):
     if len(named) == 1:
         return named[0]['id']
     ids = {t['id'] for t in candidates}
-    focus = context.get('dialogue', {}).get('task_id')
     if recent in ids:
         return recent
-    if focus in ids:
-        return focus
-    return candidates[0]['id'] if len(candidates) == 1 else None
+    # A remembered focus or narrowed singleton never authorizes scheduling.
+    return None
 
 
 def _active_series(engine, task_id):
@@ -86,13 +67,18 @@ def handle_scheduling(engine, event_id, payload, context, scope):
     cancel_match = _CANCEL.match(lead)
     cancel = bool(cancel_match)
     cancel_series = cancel and cancel_match.group('target') != 'напоминание'
-    recent = _recent_prompt(engine, payload)
     promise = bool(_PROMISE.match(lead)) or bool(re.match(r'^(?:я\s+)?ещ[её]\s+не\s+сделал[а]?[,.; ]+(?:я\s+)?сделаю\b', lead))
-    short_time = bool(recent and _BARE_TIME.match(lead))
+    short_time = bool(_BARE_TIME.match(lead))
     not_done = bool(_NOT_DONE.fullmatch(lead))
-    if not_done and not (recent or payload.get('task_id') or engine.reference_ids(payload['text'])):
-        return False
     if not (request or cancel or promise or short_time or not_done):
+        return False
+    direct = _one_task(engine, payload, context, None)
+    anchor = _recent_prompt(engine, payload, event_id) if direct is None or short_time else None
+    recent = anchor[0] if anchor else None
+    short_time = bool(recent and short_time and (direct is None or direct == recent))
+    if not (request or cancel or promise or short_time or not_done):
+        return False
+    if not_done and not (recent or payload.get('task_id') or engine.reference_ids(payload['text'])):
         return False
     reference = datetime.fromtimestamp(engine._message_time(payload), engine.tz)
     unquoted = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', '', payload['text'])
@@ -105,6 +91,9 @@ def handle_scheduling(engine, event_id, payload, context, scope):
     task = engine.s.execute('SELECT * FROM tasks WHERE business=? AND id=?', (engine.b, task_id)).fetchone() if task_id else None
     notice, asking = None, False
     with engine.s.transaction():
+        # Recheck the same bounded host/delivery snapshot immediately before use.
+        if anchor is not None and task_id == anchor[0] and _recent_prompt(engine, payload, event_id) != anchor:
+            task_id, task = None, None
         source = payload.get('source_id') or event_id
         engine.s.execute('INSERT INTO sources(business,id,body,link) VALUES(?,?,?,?) ON CONFLICT(business,id) DO NOTHING',
                          (engine.b, source, payload['text'], payload.get('link', event_id)))
@@ -164,6 +153,10 @@ def handle_scheduling(engine, event_id, payload, context, scope):
             dialogue['task_id'] = linked
             engine.intelligence.remember(event_id, payload, context,
                 {'dialogue_state': dialogue, 'reply_text': notice}, scope, first, [], engine.now())
+        if asking and linked:
+            from .scheduling_anchor import capture
+            own = engine.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?', (engine.b, key)).fetchone()
+            if own:capture(engine, event_id, payload, linked, own[0])
         engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?", (engine.b, event_id))
         engine.s.audit(engine.b, 'scheduling_turn', {'event': event_id, 'task': linked, 'asking_time': asking}, engine.now())
     return True
