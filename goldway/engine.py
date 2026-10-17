@@ -788,6 +788,9 @@ class Engine:
 
     def queue_summary(self, key):
         with nullcontext() if self.s.db.in_transaction else self.s.transaction():
+            if 'team_intake' in self.c:
+                from .manager_summary import queue_manager_summary
+                return queue_manager_summary(self, key)
             for recipient in ([self.c['meeting_recipient']] if self.c.get('meeting_recipient') else self.c['admins']):
                 dedupe=f'summary:{key}:{recipient}'
                 self.s.queue(self.b,recipient,self.summary(recipient),dedupe,self.now())
