@@ -199,6 +199,10 @@ class Engine:
             if is_promotion_command(text):
                 if added:handle_promotion_preview(self,event_id,payload)
                 return added
+            from .purchase_quote_command import is_purchase_quote_command, handle_purchase_quote
+            if is_purchase_quote_command(text):
+                if added:handle_purchase_quote(self,event_id,payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
