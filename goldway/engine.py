@@ -233,7 +233,8 @@ class Engine:
                 eligible=not operator or task_id or self.reference_ids(text) or re.search(REFERENCE_PATTERN,text.casefold())
                 if operator and sender not in self.c['admins']:
                     eligible=len(context['tasks'])==1 and self._employee_progress(payload,context['tasks'][0])
-                if eligible and len(context['tasks'])==1:
+                from .mutation_target import may_record_response
+                if eligible and len(context['tasks'])==1 and may_record_response(self,event_id,payload,context,context['tasks'][0]['id']):
                     from .deadlines import is_relative_deadline
                     self._record_response(context['tasks'][0]['id'],sender,payload['received_at'],
                                           progress=(self._employee_progress(payload,context['tasks'][0]) and not
@@ -367,6 +368,7 @@ class Engine:
         event=self.s.execute('SELECT * FROM events WHERE business=? AND id=?',(self.b,event_id)).fetchone()
         if not event or event['state'] in ('done','superseded'): return
         p=json.loads(event['payload']); kind=event['kind']
+        from .mutation_target import capture as capture_target, MutationAmbiguous, clarify as clarify_target
         try:
             from .answer_rewrite import is_rewrite_request, handle_answer_rewrite
             if kind=='reply' and 'team_intake' in self.c and is_rewrite_request(p['text']):
@@ -411,6 +413,7 @@ class Engine:
                         self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                         self.s.audit(self.b,'duplicate_submission',{'event':event_id,'sender':p['sender']},self.now())
                     return
+            original_task_ids=tuple(t['id'] for t in context['tasks'])
             intelligence = self.intelligence if kind=='reply' else None
             scope = intelligence.enrich(p,context,self.now()) if intelligence else None
             if intelligence:
@@ -427,6 +430,7 @@ class Engine:
                 from .scheduling_dialogue import handle_scheduling
                 if handle_scheduling(self, event_id, p, context, scope):
                     return
+            mutation_guard=capture_target(self,event_id,p,context,original_task_ids)
             explicit_reference=p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())
             explicit_creation=operator and re.search(r'\bсоздай(?:те)?\s+(?:(?:новую|тестовую)\s+)*задачу\b',p['text'].casefold())
             completion_phrase=re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())
@@ -444,6 +448,7 @@ class Engine:
                     context['availability']=self.c.get('availability','development')
                 direct=basic_reply(p['text']) if context['kind']=='conversation' and not intelligence else None
                 result=({'actions':[],'summary':'Объяснены возможности помощника.','reply_text':direct} if direct else self.model.propose(context))
+                if mutation_guard is not None and context.get('kind')!='operator_chat':raise MutationAmbiguous()
                 if context['kind']=='conversation' and result.get('actions'):
                     raise ValueError('General conversation cannot modify tasks')
                 self.s.audit(self.b,'deterministic_reply' if direct else 'model_proposal',{'event':event_id,'result':result},self.now())
@@ -476,6 +481,7 @@ class Engine:
                 reply_text=result.get('reply_text')
                 if not isinstance(reply_text,str) or not reply_text.strip() or len(reply_text)>3000:
                     raise ValueError('Conversation requires a direct reply_text')
+            context['_mutation_target_guard']=mutation_guard
             with self.s.transaction():
                 # Re-check event after model call to guard replay by another process.
                 state=self.s.execute('SELECT state FROM events WHERE business=? AND id=?',(self.b,event_id)).fetchone()[0]
@@ -599,6 +605,9 @@ class Engine:
                 if submission and (changed or result['intent']=='meeting'):
                     self.s.execute('INSERT OR IGNORE INTO runtime(key,value) VALUES(?,?)',
                         (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',json.dumps({'tasks':[id for id in dict.fromkeys(changed) if id not in context.get('restricted_proposal_ids',set())],'intent':result['intent']})))
+        except MutationAmbiguous:
+            with self.s.transaction():clarify_target(self,event_id,p)
+            return
         except Exception as exc:
             self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(event_error(exc),self.b,event_id))
             if kind=='reply':
@@ -613,6 +622,8 @@ class Engine:
     def _apply(self,a,context,source,kind,p):
         if not isinstance(a,dict): raise ValueError('Invalid action')
         a=dict(a)
+        from .mutation_target import permit as permit_target
+        permit_target(self,p,context,a)
         from .consent_anchor import permit_action
         permit_action(self,p,a)
         mask=a.pop('set_fields',None)
