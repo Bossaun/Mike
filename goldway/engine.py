@@ -183,6 +183,10 @@ class Engine:
             if is_design_brief_command(text):
                 if added:handle_design_brief(self, event_id, payload)
                 return added
+            from .catalog_completeness_command import is_catalog_completeness_command, handle_catalog_completeness
+            if is_catalog_completeness_command(text):
+                if added:handle_catalog_completeness(self,event_id,payload)
+                return added
             from .stock_coverage_command import is_stock_coverage_command, handle_stock_coverage
             if is_stock_coverage_command(text):
                 if added:handle_stock_coverage(self,event_id,payload)
