@@ -215,6 +215,10 @@ class Engine:
             if is_sales_cost_check_command(text):
                 if added:handle_sales_cost_check(self,event_id,payload)
                 return added
+            from .purchase_stock_preview_command import is_purchase_stock_command, handle_purchase_stock
+            if is_purchase_stock_command(text):
+                if added:handle_purchase_stock(self,event_id,payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:
