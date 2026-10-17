@@ -156,6 +156,10 @@ class Engine:
                 if added:handle_source_followup(self,event_id,payload)
                 return added
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
+            from .personal_reference import is_personal_reference, handle_personal_reference
+            if is_personal_reference(text):
+                if added:handle_personal_reference(self,event_id,payload)
+                return added
             from .preview_help_command import is_preview_help_command, handle_preview_help
             if added and is_preview_help_command(text) and handle_preview_help(self,event_id,payload):
                 return added
