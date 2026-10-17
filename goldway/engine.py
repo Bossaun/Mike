@@ -222,6 +222,10 @@ class Engine:
             if is_purchase_stock_command(text):
                 if added:handle_purchase_stock(self,event_id,payload)
                 return added
+            from .task_card_reference import reference_request, handle_task_reference
+            if reference_request(payload):
+                if added:handle_task_reference(self,event_id,payload)
+                return added
             operator=self._task_dialogue_turn(payload,'reply')
             general=basic_reply(text) is not None if operator else is_general(text)
             if added and not general:

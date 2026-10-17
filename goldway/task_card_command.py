@@ -167,12 +167,12 @@ def _snapshot(reader, store, config, sender, index, now, number, trusted_task_id
     return content[0], tuple(sorted(closure | docs)), fingerprint
 
 
-def build_task_card(store, config, sender, existing_index, *, clock, number=None, trusted_task_id=None):
+def build_task_card(store, config, sender, existing_index, *, clock, number=None, trusted_task_id=None, reader=None):
     try:
         if not callable(clock):
             _fail()
         now = clock()
-        reader = _Reader(store)
+        reader = reader if reader is not None else _Reader(store)
         initial = _snapshot(reader, store, config, sender, existing_index, now, number, trusted_task_id)
         task, refs, fingerprint = initial
         zone = ZoneInfo(config['timezone'])
@@ -234,4 +234,6 @@ def handle_task_card(engine, event_id, payload):
                 _fail()  # Caller transaction rolls back any partial private queue.
             row = engine.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?', (engine.b, key)).fetchone()
             intelligence.protect_outbox(row['id'], refs)
+            from .task_card_reference import remember_card
+            remember_card(engine, event_id, payload, draft, row['id'], intelligence=intelligence)
     engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?", (engine.b, event_id))

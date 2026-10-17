@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS deliveries(
  id INTEGER PRIMARY KEY, outbox_id INTEGER NOT NULL, at REAL NOT NULL,
  state TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS consent_delivery_lookup ON deliveries(outbox_id,state,at);
+CREATE TABLE IF NOT EXISTS task_card_references(
+ business TEXT NOT NULL, scope_key TEXT NOT NULL, event_key TEXT NOT NULL,
+ outbox_id INTEGER NOT NULL, body_hash TEXT NOT NULL, task_id TEXT NOT NULL,
+ task_revision INTEGER NOT NULL, snapshot_digest TEXT NOT NULL,
+ PRIMARY KEY(business,scope_key,event_key), UNIQUE(business,outbox_id));
 CREATE TABLE IF NOT EXISTS connections(
  business TEXT NOT NULL, id TEXT NOT NULL, enabled INTEGER NOT NULL,
  can_reply INTEGER NOT NULL, bot_user TEXT, PRIMARY KEY(business,id));
