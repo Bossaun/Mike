@@ -156,6 +156,9 @@ class Engine:
                 if added:handle_source_followup(self,event_id,payload)
                 return added
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
+            from .preview_help_command import is_preview_help_command, handle_preview_help
+            if added and is_preview_help_command(text) and handle_preview_help(self,event_id,payload):
+                return added
             from .answer_rewrite import is_rewrite_request
             if self._closed_team() and payload.get('channel') in ('bot','business') and is_rewrite_request(text):return added
             from .ordinal_followup import is_ordinal_request
