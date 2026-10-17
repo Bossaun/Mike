@@ -369,6 +369,9 @@ class Engine:
         if not event or event['state'] in ('done','superseded'): return
         p=json.loads(event['payload']); kind=event['kind']
         from .mutation_target import capture as capture_target, MutationAmbiguous, clarify as clarify_target
+        from .meeting_questions import (capture as capture_questions, validate as validate_questions,
+            MeetingQuestionsInvalid, check_bundle, queue as queue_questions, recheck as recheck_questions, clarify as clarify_questions)
+        question_host=None;question_draft=None;question_intelligence=self.intelligence
         try:
             from .answer_rewrite import is_rewrite_request, handle_answer_rewrite
             if kind=='reply' and 'team_intake' in self.c and is_rewrite_request(p['text']):
@@ -431,6 +434,7 @@ class Engine:
                 if handle_scheduling(self, event_id, p, context, scope):
                     return
             mutation_guard=capture_target(self,event_id,p,context,original_task_ids)
+            question_host=capture_questions(self,event_id,p,context)
             explicit_reference=p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())
             explicit_creation=operator and re.search(r'\bсоздай(?:те)?\s+(?:(?:новую|тестовую)\s+)*задачу\b',p['text'].casefold())
             completion_phrase=re.search(r'\b(?:готов(?:о|а|ы)?|заверш(?:ил|ила|ено)|сделал(?:а)?|сделано|закончил(?:а)?)\b',p['text'].casefold())
@@ -481,6 +485,7 @@ class Engine:
                 reply_text=result.get('reply_text')
                 if not isinstance(reply_text,str) or not reply_text.strip() or len(reply_text)>3000:
                     raise ValueError('Conversation requires a direct reply_text')
+            question_draft=validate_questions(self,p,context,result,question_host)
             context['_mutation_target_guard']=mutation_guard
             with self.s.transaction():
                 # Re-check event after model call to guard replay by another process.
@@ -518,10 +523,12 @@ class Engine:
                     reviewed=[dict(self.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(self.b,t)).fetchone()) for t in dict.fromkeys(changed)]
                     if submission:reviewed=[t for t in reviewed if t['status']=='proposed']
                     review_ids={t['id'] for t in reviewed} if submission else set(changed)
+                    if question_draft:check_bundle(meeting_messages(reviewed,self.c),question_draft)
                     recipients=[self.c['meeting_recipient']] if self.c.get('meeting_recipient') else self.c['admins']
                     for recipient in (recipients if reviewed or not changed else []):
                         review_key=f'meeting:{p["sender"]}:{fingerprint(p["text"])}' if submission else event_id
                         self.queue_meeting_review(reviewed,review_key,recipient)
+                    if question_draft:queue_questions(self,p,context,question_draft)
                     if submission and p['sender'] not in self.c['admins']:
                         self.s.queue(self.b,p['sender'],'Планёрка разобрана. Предложения переданы руководителю на подтверждение.',
                             f'meeting-receipt:{p["sender"]}:{fingerprint(p["text"])}',self.now(),preferred_transport=p.get('channel'))
@@ -599,12 +606,17 @@ class Engine:
                 if not actions and kind=='reply' and not meeting_review:
                     self.s.queue(self.b,p['sender'],reply_text or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
                 if intelligence:
+                    if question_draft:recheck_questions(self,p,context,question_draft.host)
                     intelligence.remember(event_id,p,context,result,scope,first_outbox_id,changed,self.now())
+                    if question_draft:recheck_questions(self,p,context,question_draft.host)
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                 self.s.audit(self.b,'processed',{'event':event_id,'sender':p['sender'],'tasks':changed,'summary':result.get('summary','')[:2000]},self.now())
                 if submission and (changed or result['intent']=='meeting'):
                     self.s.execute('INSERT OR IGNORE INTO runtime(key,value) VALUES(?,?)',
                         (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',json.dumps({'tasks':[id for id in dict.fromkeys(changed) if id not in context.get('restricted_proposal_ids',set())],'intent':result['intent']})))
+        except MeetingQuestionsInvalid:
+            with self.s.transaction():clarify_questions(self,event_id,p,question_intelligence)
+            return
         except MutationAmbiguous:
             with self.s.transaction():clarify_target(self,event_id,p)
             return
