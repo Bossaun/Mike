@@ -157,6 +157,10 @@ class Engine:
                 return added
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
             from .personal_reference import is_personal_reference, handle_personal_reference
+            from .meeting_binding import is_binding_command, handle as handle_meeting_binding
+            if is_binding_command(text):
+                if added:handle_meeting_binding(self,event_id,payload)
+                return added
             if is_personal_reference(text):
                 if added:handle_personal_reference(self,event_id,payload)
                 return added
@@ -615,6 +619,9 @@ class Engine:
                     self.s.queue(self.b,p['sender'],reply_text or 'Уточните результат и следующий шаг.',f'clarify:{event_id}',self.now(),preferred_transport=p.get('channel'))
                 if intelligence:
                     if question_draft:recheck_questions(self,p,context,question_draft.host)
+                    if meeting_review and kind=='reply':
+                        from .meeting_binding import capture as capture_meeting_binding
+                        capture_meeting_binding(self,event_id,p,context,result,reviewed,first_outbox_id)
                     intelligence.remember(event_id,p,context,result,scope,first_outbox_id,changed,self.now())
                     if question_draft:recheck_questions(self,p,context,question_draft.host)
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
