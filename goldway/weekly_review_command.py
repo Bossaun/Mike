@@ -1,8 +1,9 @@
 """Exact own-meeting weekly review: read only, no dated-result inference.
 
-Fixed build passes: two I35 readers, one shared selected-proof reader, one
-allowlisted I04 reader (each <=4 MiB/8192 rows/2048 queries: <=16 MiB).
-Each guard uses one I35 reader and one proof/receipt reader (<=8 MiB).
+Fixed build passes: two I35 readers, one shared selected/report-proof reader,
+one allowlisted I04 reader and TWO actual I37 loads (five readers each):
+14 readers <=56 MiB. Each guard has one I35/proof pass and ONE I37 load:
+seven readers <=28 MiB. Each Reader <=4 MiB/8192 rows/2048 queries.
 Only the initialized host may inject the guard; no constructors or refreshes.
 """
 from dataclasses import asdict
@@ -11,6 +12,7 @@ import json
 import re
 
 from . import meeting_binding as binding
+from . import dated_result as reports
 from . import meeting_week_adapter as adapter
 from . import weekly_draft_render as render
 from .answer_citations import _hash, _scope
@@ -20,6 +22,7 @@ from .task_card_reference import _barrier, _protected
 
 PREFIX = 'weekly-review:'
 CANCEL = 'Weekly review authorization changed; request a fresh review'
+ATTRIBUTION = 'Результаты — по вашим зарегистрированным отчётам; независимой проверки нет.'
 NOTICE = 'Не удалось сверить планёрку. Укажите её код MB и семь дат периода; проверьте текущую регистрацию и доступ.'
 _REQUEST = re.compile(r'Сверь планёрку (MB-[0-9a-f]{16}) за ([0-9]{4}-[0-9]{2}-[0-9]{2}) — ([0-9]{4}-[0-9]{2}-[0-9]{2})')
 
@@ -137,7 +140,7 @@ def _typed(value):
     return json.loads(json.dumps(asdict(value), default=str, sort_keys=True))
 
 
-def _proof(engine, code, payload, inputs, reader):
+def _proof(engine, code, payload, inputs, reader, reported):
     scope, policy = binding._gate(engine, payload, engine.intelligence)
     registration = binding._load(reader, scope, code)
     refs, snapshots = set(), []
@@ -152,8 +155,30 @@ def _proof(engine, code, payload, inputs, reader):
         _deny()
     # Full registration metadata includes expiry/source/policy and explicit links;
     # elapsed observation time is deliberately absent from the fingerprint.
-    digest = _hash([scope, policy, registration, [_typed(inputs.meeting), [_typed(link) for link in inputs.task_bindings], sorted(inputs.document_ids), sorted(inputs.meeting_evidence_ids)], snapshots, sorted(refs)])
-    return digest, tuple(sorted(refs))
+    report_digest = _report_proof(engine,code,payload,reported,reader)
+    digest = _hash([report_digest, scope, policy, registration, [_typed(inputs.meeting), [_typed(link) for link in inputs.task_bindings], sorted(inputs.document_ids), sorted(inputs.meeting_evidence_ids)], snapshots, sorted(refs)])
+    return digest, tuple(sorted(refs)), report_digest
+
+
+def _report_proof(engine,code,payload,reported,reader):
+    """Seal ALL exact current report metadata, including withdrawn index entries.
+
+    Reuse the selected-proof Reader; no extra allowance, broad scans or bodies.
+    Actual I37 loader remains the authority for current active source/link proof.
+    """
+    if type(reported) is not reports.ReportedInputs:
+        _deny()
+    if (type(reported.sources) is not tuple or type(reported.result_bindings) is not tuple or
+        len(reported.sources)!=len(reported.result_bindings) or len(reported.sources)>32 or
+        len(reported.sources)>reports.MAX_REPORTS):
+        _deny()
+    scope,_=binding._gate(engine,payload,engine.intelligence)
+    index=reports._read(reader,reports._key(scope,code),True)
+    ids=reports._ids(reader,scope,code)
+    if len(ids)>32:
+        _deny()
+    records=[reports._read(reader,reports._key(scope,code,rid)) for rid in ids]
+    return _hash([index,ids,records,_typed(reported)])
 
 
 def _receipt_key(business, identifier):
@@ -204,12 +229,16 @@ def handle(engine, event_id, payload):
         reader = _Reader(store)
         _barrier(reader,engine.b,scope,event_id)
         inputs = binding.registered_inputs(engine,code,payload)
-        initial, refs = _proof(engine,code,payload,inputs,reader)
+        reported = reports.reported_inputs(engine,code,payload)
+        _same_host(engine,host)
+        initial, refs, report_digest = _proof(engine,code,payload,inputs,reader,reported)
         draft = adapter.project_week(_ReadView(store),engine.c,payload['sender'],meeting=inputs.meeting,
-            start=start,end=end,task_bindings=inputs.task_bindings,result_bindings=(),sources=(),
+            start=start,end=end,task_bindings=inputs.task_bindings,result_bindings=reported.result_bindings,sources=reported.sources,
             document_ids=inputs.document_ids,meeting_evidence_ids=inputs.meeting_evidence_ids,
             meeting_anchor_confirmed=True,now=engine.now())
         pages = render.render_weekly_draft(draft)
+        if reported.result_bindings:
+            pages = [ATTRIBUTION+'\n\n'+page for page in pages]
         if not 1 <= len(pages) <= 8 or sum(render._units(p) for p in pages)>24000 or any(render._units(p)>3500 for p in pages):
             _deny()
         # Persist minimal actual request metadata; no text/transcript duplicates.
@@ -230,16 +259,18 @@ def handle(engine, event_id, payload):
             _same_host(engine,host)
             row = _outbox(reader,engine.b,identifier)
             _protected(reader,engine.b,identifier,refs)
-            receipt = dict(version=1,business=engine.b,outbox=identifier,code=code,start=start.isoformat(),
+            receipt = dict(version=2,business=engine.b,outbox=identifier,code=code,start=start.isoformat(),
                 end=(end-timedelta(days=1)).isoformat(),request=request,event=_hash(event_id),event_id=event_id,scope=_hash(scope),
-                proof=initial,refs=list(refs),ordinal=ordinal,pages=len(pages),seal=_seal(row))
+                proof=initial,report_proof=report_digest,refs=list(refs),ordinal=ordinal,pages=len(pages),seal=_seal(row))
             value = json.dumps(receipt,ensure_ascii=False,separators=(',',':'))
             if len(value.encode())>16384:
                 _deny()
             store.execute('INSERT INTO runtime(key,value) VALUES(?,?)',(_receipt_key(engine.b,identifier),value))
         _same_host(engine,host)
         fresh = binding.registered_inputs(engine,code,payload)
-        if fresh != inputs or _proof(engine,code,payload,fresh,reader) != (initial,refs):
+        fresh_reported = reports.reported_inputs(engine,code,payload)
+        _same_host(engine,host)
+        if fresh != inputs or fresh_reported!=reported or _proof(engine,code,payload,fresh,reader,fresh_reported) != (initial,refs,report_digest):
             _deny()
         # Catch mutations in queue/protect callbacks, including earlier pages.
         for ordinal in range(1,len(pages)+1):
@@ -250,7 +281,7 @@ def handle(engine, event_id, payload):
                 _deny()
             _protected(reader,engine.b,identifier,refs)
             saved = _load_receipt(reader,engine.b,identifier)
-            if saved['seal']!=_seal(row) or saved['proof']!=initial:
+            if saved['seal']!=_seal(row) or saved['proof']!=initial or saved['report_proof']!=report_digest:
                 _deny()
     except Exception:
         store.execute('ROLLBACK TO weekly_review_build')
@@ -274,11 +305,11 @@ def _load_receipt(reader,business,identifier):
     if len(rows)!=1:
         _deny()
     receipt=json.loads(rows[0]['value'])
-    if type(receipt) is not dict or set(receipt)!=set(('version','business','outbox','code','start','end','request','event','event_id','scope','proof','refs','ordinal','pages','seal')):
+    if type(receipt) is not dict or set(receipt)!=set(('version','business','outbox','code','start','end','request','event','event_id','scope','proof','report_proof','refs','ordinal','pages','seal')):
         _deny()
     if type(receipt['event_id']) is not str or not 0<len(receipt['event_id'].encode())<=1024 or _hash(receipt['event_id'])!=receipt['event']:
         _deny()
-    if receipt['version']!=1 or receipt['business']!=business or receipt['outbox']!=identifier:
+    if type(receipt['version']) is not int or receipt['version']!=2 or receipt['business']!=business or receipt['outbox']!=identifier:
         _deny()
     if type(receipt['ordinal']) is not int or type(receipt['pages']) is not int or not 1<=receipt['ordinal']<=receipt['pages']<=8:
         _deny()
@@ -288,7 +319,7 @@ def _load_receipt(reader,business,identifier):
         _deny()
     if receipt['refs']!=sorted(set(receipt['refs'])):
         _deny()
-    for key in ('event','scope','proof','seal'):
+    for key in ('event','scope','proof','report_proof','seal'):
         if type(receipt[key]) is not str or not re.fullmatch('[0-9a-f]{64}',receipt[key]):
             _deny()
     return receipt
@@ -330,7 +361,9 @@ def make_delivery_guard(engine):
             if accepted != dict(payload,text=expected_text):
                 _deny()
             inputs=binding.registered_inputs(engine,code,payload)
-            if _proof(engine,code,payload,inputs,reader)!=(receipt['proof'],tuple(receipt['refs'])):
+            reported=reports.reported_inputs(engine,code,payload)
+            _same_host(engine,host)
+            if _proof(engine,code,payload,inputs,reader,reported)!=(receipt['proof'],tuple(receipt['refs']),receipt['report_proof']):
                 _deny()
             _protected(reader,engine.b,current['id'],receipt['refs'])
             _same_host(engine,host)
