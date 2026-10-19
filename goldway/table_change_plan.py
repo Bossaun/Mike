@@ -321,6 +321,26 @@ class ApplyResult:
     used_nonces: frozenset[str]
 
 
+def check_plan_baseline(workbook: Workbook, plan: ChangePlan) -> Row:
+    """Return the unchanged target row, or reject a conflicting local snapshot.
+
+    This read-only check grants no approval or write permission. Applying a plan
+    must still validate approval before checking its baseline.
+    """
+    if type(plan) is not ChangePlan:
+        raise ValueError('Validated change plan required')
+    try:
+        row = lookup_row(workbook, workbook_id=plan.workbook_id,
+                         sheet_id=plan.sheet_id, identity=plan.identity)
+    except LookupError:
+        raise ConflictError('Target workbook/sheet/row is missing or ambiguous') from None
+    sheet = next(sheet for sheet in workbook.sheets if sheet.id == plan.sheet_id)
+    if (workbook.revision != plan.workbook_revision or sheet.revision != plan.sheet_revision
+            or _row_data(row) != _row_data(plan.baseline)):
+        raise ConflictError('Baseline changed: manual edit, row move or revision conflict')
+    return row
+
+
 def apply_to_fake_workbook(workbook: Workbook, plan: ChangePlan, token: ApprovalToken, *,
                           required_approver: str, now: int, signing_key: bytes,
                           used_nonces: frozenset[str], next_workbook_revision: str,
@@ -332,15 +352,8 @@ def apply_to_fake_workbook(workbook: Workbook, plan: ChangePlan, token: Approval
     """
     validate_approval(plan, token, required_approver=required_approver, now=now,
                       signing_key=signing_key, used_nonces=used_nonces)
-    try:
-        row = lookup_row(workbook, workbook_id=plan.workbook_id,
-                         sheet_id=plan.sheet_id, identity=plan.identity)
-    except LookupError:
-        raise ConflictError('Target workbook/sheet/row is missing or ambiguous') from None
+    row = check_plan_baseline(workbook, plan)
     sheet = next(sheet for sheet in workbook.sheets if sheet.id == plan.sheet_id)
-    if (workbook.revision != plan.workbook_revision or sheet.revision != plan.sheet_revision
-            or _row_data(row) != _row_data(plan.baseline)):
-        raise ConflictError('Baseline changed: manual edit, row move or revision conflict')
     for current, proposed in ((workbook.revision, next_workbook_revision),
                               (sheet.revision, next_sheet_revision), (row.revision, next_row_revision)):
         _label(proposed, 'new revision')

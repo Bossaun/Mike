@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .table_conflict_command import is_command as is_table_conflict, handle as handle_table_conflict
+            if is_table_conflict(text):
+                if added:handle_table_conflict(self,event_id,payload)
+                return added
             from .table_plan_preview_command import is_command as is_table_plan_preview, handle as handle_table_plan_preview
             if is_table_plan_preview(text):
                 if added:handle_table_plan_preview(self,event_id,payload)
