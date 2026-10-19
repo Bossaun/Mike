@@ -234,6 +234,10 @@ class Engine:
             if is_own_task_overview(text):
                 if added:handle_own_task_overview(self,event_id,payload)
                 return added
+            from .campaign_report_command import is_command as is_campaign_report, handle as handle_campaign_report
+            if is_campaign_report(text):
+                if added:handle_campaign_report(self,event_id,payload)
+                return added
             from .publication_gap_command import is_command as is_publication_gap, handle as handle_publication_gap
             if is_publication_gap(text):
                 if added:handle_publication_gap(self,event_id,payload)
