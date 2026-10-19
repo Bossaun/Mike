@@ -87,7 +87,8 @@ def run(e, run_seconds=None):
     if bot.get('username'):e.c['bot_username']=bot['username']
     bootstrap_groups(e.s,e.c)
     from .weekly_review_command import make_delivery_guard
-    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e)); dispatch.recover()
+    from .personal_reference_discovery import make_delivery_guard as make_reference_list_guard
+    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e),personal_list_guard=make_reference_list_guard(e)); dispatch.recover()
     sheets=None
     if e.c.get('sheets_write'):
         import gspread

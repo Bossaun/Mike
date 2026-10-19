@@ -160,6 +160,10 @@ class Engine:
             if is_weekly_review_command(text):
                 if added:handle_weekly_review(self,event_id,payload)
                 return added
+            from .personal_reference_discovery import is_command as is_reference_list, handle as handle_reference_list
+            if is_reference_list(text):
+                if added:handle_reference_list(self,event_id,payload)
+                return added
             from .personal_reference import is_personal_reference, handle_personal_reference
             from .dated_result import is_dated_result, handle as handle_dated_result
             if is_dated_result(text):
