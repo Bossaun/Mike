@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .barter_limit_command import is_command as is_barter_limit, handle as handle_barter_limit
+            if is_barter_limit(text):
+                if added:handle_barter_limit(self,event_id,payload)
+                return added
             from .influencer_roi_command import is_command as is_influencer_roi, handle as handle_influencer_roi
             if is_influencer_roi(text):
                 if added:handle_influencer_roi(self,event_id,payload)
