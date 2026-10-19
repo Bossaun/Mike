@@ -226,6 +226,10 @@ class Engine:
             if is_task_card_command(text):
                 if added:handle_task_card(self, event_id, payload)
                 return added
+            from .own_impediments import is_command as is_own_impediments, handle as handle_own_impediments
+            if is_own_impediments(text):
+                if added:handle_own_impediments(self,event_id,payload)
+                return added
             from .own_task_overview import is_own_task_overview,handle_own_task_overview
             if is_own_task_overview(text):
                 if added:handle_own_task_overview(self,event_id,payload)
