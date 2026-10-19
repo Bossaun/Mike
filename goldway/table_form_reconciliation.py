@@ -180,6 +180,12 @@ def _book_fingerprint(book):
     return _hash(['table-form-full-workbook:v1',book.id,book.revision,data])
 
 
+@dataclass(frozen=True)
+class FormSourceProof:
+    sources:SourcePair
+    fingerprint:str
+
+
 class TableFormReconciler:
     def __init__(self,*,form_driver,account_driver,current_sources,expected_sources,bindings,form_columns,account_columns,enabled=False):
         self._drivers=(form_driver,account_driver);self._callback=current_sources;self._sources=expected_sources;self._bindings=bindings;self._columns=(form_columns,account_columns);self._enabled=enabled is True
@@ -269,5 +275,15 @@ class TableFormReconciler:
             for driver,expected in zip(self._drivers,fingerprints):
                 if _book_fingerprint(driver.snapshot())!=expected or self._current(now)!=source_hash or self._input(period,definitions,monday,coverage_complete,coverage_observed_on,now)!=inputs:_deny()
             return WorkbookFormReport(lines,self._sources,period,now,due,source_hash,cutoff_hash,fingerprints[0],fingerprints[1],form_proofs+account_proofs)
+        except FormReconciliationUnavailable:raise
+        except Exception:raise FormReconciliationUnavailable() from None
+
+
+    def source_proof(self,*,now):
+        """Metadata-only bound source proof; no SQL/snapshot/cell transfer."""
+        if not self._enabled:_deny()
+        try:
+            fingerprint=self._current(_aware(now))
+            return FormSourceProof(self._sources,fingerprint)
         except FormReconciliationUnavailable:raise
         except Exception:raise FormReconciliationUnavailable() from None
