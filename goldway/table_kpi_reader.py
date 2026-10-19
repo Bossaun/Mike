@@ -59,6 +59,12 @@ class KpiSource:
 
 
 @dataclass(frozen=True)
+class KpiSourceProof:
+    source:KpiSource
+    fingerprint:str
+
+
+@dataclass(frozen=True)
 class MetricBinding:
     metric_id:str
     sheet_id:str
@@ -145,6 +151,17 @@ class TableKpiReader:
         if type(current) is not KpiSource or _source_data(current)!=source_data or source.revoked or not _aware(source.valid_from)<=now<_aware(source.expires_at):_deny()
         if self._driver is not driver or self._callback is not callback or self._source is not source or self._bindings is not bindings or self._columns is not columns or getattr(driver.snapshot,'__self__',None) is not owner or getattr(driver.snapshot,'__func__',None) is not function:_deny()
         return _hash(['table-kpi-source:v1',source_data,[[row.metric_id,row.sheet_id,row.identity.column,row.identity.value] for row in bindings],[getattr(columns,key) for key in columns.__dataclass_fields__]])
+
+    def source_proof(self,*,now):
+        """Bound-source metadata only; no SQL, snapshots or KPI cells."""
+        if not self._enabled:_deny()
+        try:
+            now=_aware(now);source=self._source;data=_source_data(source)
+            fingerprint=self._current(now)
+            if self._source is not source or _source_data(source)!=data:_deny()
+            return KpiSourceProof(source,fingerprint)
+        except TableKpiUnavailable:raise
+        except Exception:raise TableKpiUnavailable() from None
 
     def read_daily(self,*,period,definitions,coverage_complete,coverage_observed_on,now):
         if not self._enabled:_deny()
