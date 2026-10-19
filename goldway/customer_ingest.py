@@ -123,6 +123,30 @@ class PromiseEvaluation:
     live_authorized:bool=field(default=False,init=False)
 
 
+REVIEW_DRAFT='Черновик касания для ручной проверки; не отправлять автоматически.'
+
+
+def _anchor_seals(conversation,events,referenced,domain,*,outgoing=False):
+    seals=[]
+    for identifier in sorted(referenced):
+        event=events.get(identifier)
+        if event is None or (outgoing and event.direction!='outgoing'):_deny()
+        seals.append((identifier,_hash([domain,
+            [conversation.customer_id,conversation.channel,conversation.thread_id,conversation.source_id],
+            event.id,event.direction,_utc(event.at).isoformat(),event.confirmed,event.reply_to,event.evidence_id])))
+    return tuple(seals)
+
+
+@dataclass(frozen=True)
+class TouchEvaluation:
+    preview:core.Preview
+    summary:core.TouchSummary|None
+    source_proof:SourceProof
+    anchor_seals:tuple[tuple[str,str],...]
+    requires_review:bool=field(default=True,init=False)
+    live_authorized:bool=field(default=False,init=False)
+
+
 class _Reader:
     def __init__(self,store):self._store=store;self.queries=0;self.rows=0;self.bytes=0
 
@@ -314,13 +338,7 @@ class CustomerIngest:
                 _id(row.target_id);_id(row.reason)
             referenced={row.event_id for row in promises}|{row.event_id for row in results}
             if len(referenced)>24:_deny()
-            events={row.id:row for row in selected};seals=[]
-            for identifier in sorted(referenced):
-                event=events.get(identifier)
-                if event is None or event.direction!='outgoing':_deny()
-                seals.append((identifier,_hash(['customer-promise-anchor:v1',
-                    [conversation.customer_id,conversation.channel,conversation.thread_id,conversation.source_id],
-                    event.id,event.direction,_utc(event.at).isoformat(),event.confirmed,event.reply_to,event.evidence_id])))
+            seals=_anchor_seals(conversation,{row.id:row for row in selected},referenced,'customer-promise-anchor:v1',outgoing=True)
             if self._active(now)!=registration:_deny()
             current=reader.state(registration.runtime_key);self._state(current,registration)
             if current!=initial:_deny()
@@ -328,6 +346,66 @@ class CustomerIngest:
             proof=SourceProof(registration.source_id,registration.business,registration.channel,fingerprint,
                 _hash(['customer-ingest-state-proof:v1',fingerprint,initial]),initial is not None)
             return PromiseEvaluation(preview,proof,tuple(seals))
+        except CustomerIngestUnavailable:raise
+        except Exception:raise CustomerIngestUnavailable() from None
+
+    def evaluate_touches(self,conversation,*,now,expected_store,plans,permissions,receipts,reporting_window=None):
+        """One admitted view, actual touch rules; structured observations confer no rights."""
+        if not self._enabled:_deny()
+        try:
+            if expected_store is not self._host[0] or expected_store is not self._store:_deny()
+            now=_utc(now);registration=self._active(now);reader=_Reader(self._store)
+            if type(conversation) is not core.Conversation or conversation.source_id!=registration.source_id or conversation.channel!=registration.channel:_deny()
+            for value in (conversation.customer_id,conversation.thread_id):_id(value)
+            def window(value):
+                if type(value) is not core.Window:_deny()
+                start=_utc(value.start);end=_utc(value.end)
+                if not timedelta(0)<end-start<=timedelta(days=366):_deny()
+            for rows,cls,cap in ((plans,core.TouchPlan,8),(permissions,core.ContactPermission,16),(receipts,core.TouchReceipt,16)):
+                if type(rows) is not tuple or len(rows)>cap:_deny()
+                for row in rows:
+                    if type(row) is not cls or row.conversation!=conversation:_deny()
+                    row.__post_init__()
+                    for value in (row.id,row.event_id):_id(value)
+                    if cls is core.TouchPlan:
+                        _id(row.owner_id);_id(row.permission_id);window(row.window)
+                        if row.draft!=REVIEW_DRAFT:_deny()
+                    elif cls is core.ContactPermission:
+                        if row.window is not None:window(row.window)
+                    else:_id(row.plan_id)
+            if reporting_window is not None:window(reporting_window)
+            initial=reader.state(registration.runtime_key);state,retained=self._state(initial,registration)
+            selected=tuple(row for row in retained if row.conversation==conversation);events={row.id:row for row in selected}
+            referenced={row.event_id for row in plans+permissions+receipts}
+            if len(referenced)>40 or any(identifier not in events for identifier in referenced):_deny()
+            ordered=tuple(sorted(permissions,key=lambda row:(_utc(events[row.event_id].at),row.id)))
+            preview=core.touch_preview(selected,plans,ordered,receipts,now=now,dispositions=())
+            summary=None if reporting_window is None else core.reconcile_touches(selected,plans,receipts,conversation=conversation,window=reporting_window,now=now)
+            identifiers={row.id for row in plans}
+            if type(preview) is not core.Preview or type(preview.candidates) is not tuple or type(preview.blocked) is not tuple or len(preview.candidates)+len(preview.blocked)>len(plans):_deny()
+            seen=set()
+            for row in preview.candidates:
+                if type(row) is not core.Candidate or row.conversation!=conversation or row.kind!='touch' or row.target_id not in identifiers or row.target_id in seen or row.draft_only is not True or row.draft!=REVIEW_DRAFT:_deny()
+                for value in (row.id,row.target_id,row.owner_id):_id(value)
+                if type(row.evidence_ids) is not tuple or not 1<=len(row.evidence_ids)<=3:_deny()
+                for value in row.evidence_ids:_id(value)
+                _utc(row.due_at);seen.add(row.target_id)
+            for row in preview.blocked:
+                if type(row) is not core.Blocked or row.conversation!=conversation or row.target_id not in identifiers or row.target_id in seen:_deny()
+                _id(row.target_id);_id(row.reason);seen.add(row.target_id)
+            if summary is not None:
+                if type(summary) is not core.TouchSummary:_deny()
+                for values in (summary.planned_ids,summary.confirmed_ids,summary.pending_ids,summary.uncertain_ids):
+                    if type(values) is not tuple or len(values)>8 or len(set(values))!=len(values) or not set(values)<=identifiers:_deny()
+                if set(summary.confirmed_ids)|set(summary.pending_ids)|set(summary.uncertain_ids)!=set(summary.planned_ids) or len(summary.confirmed_ids)+len(summary.pending_ids)+len(summary.uncertain_ids)!=len(summary.planned_ids):_deny()
+            seals=_anchor_seals(conversation,events,referenced,'customer-touch-anchor:v1')
+            if self._active(now)!=registration:_deny()
+            current=reader.state(registration.runtime_key);self._state(current,registration)
+            if current!=initial:_deny()
+            self._host_check();fingerprint=registration_fingerprint(registration)
+            proof=SourceProof(registration.source_id,registration.business,registration.channel,fingerprint,
+                _hash(['customer-ingest-state-proof:v1',fingerprint,initial]),initial is not None)
+            return TouchEvaluation(preview,summary,proof,seals)
         except CustomerIngestUnavailable:raise
         except Exception:raise CustomerIngestUnavailable() from None
 
