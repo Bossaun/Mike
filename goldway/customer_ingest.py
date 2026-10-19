@@ -96,6 +96,32 @@ class IngestReceipt:
     live_authorized:bool=field(default=False,init=False)
 
 
+@dataclass(frozen=True)
+class ArchiveImportReceipt:
+    source_id:str
+    retained_events:int
+    archive_fingerprint:str
+    replayed:bool
+    live_authorized:bool=field(default=False,init=False)
+
+
+def _archive_read(reader,key,cap):
+    """Point projection sharing the operation's cumulative Reader counters."""
+    reader.queries+=1
+    if reader.queries>MAX_QUERIES:_deny()
+    rows=reader._store.execute("""SELECT CASE WHEN typeof(value)='text'
+        AND length(CAST(value AS BLOB))<=? THEN value END AS value
+        FROM runtime WHERE key=? LIMIT 2""",(cap,key)).fetchall()
+    reader.rows+=len(rows)
+    if len(rows)>1 or reader.rows>MAX_ROWS:_deny()
+    if not rows:return None
+    value=rows[0]['value']
+    if type(value) is not str:_deny()
+    reader.bytes+=len(value.encode())
+    if reader.bytes>MAX_BYTES:_deny()
+    return value
+
+
 def registration_fingerprint(registration):
     """Canonical metadata fingerprint; host assertion, never provider authority."""
     if type(registration) is not SourceRegistration:_deny()
@@ -242,6 +268,97 @@ class CustomerIngest:
         if _cursor(last['cursor_before'])!=(inventory[-2] if len(inventory)>1 else None):_deny()
         if _cursor(last['cursor_after'])!=state['cursor']:_deny()
         return state,events
+
+    def import_initial_archive(self,*,source,exported_at,handoff_cursor,events,now):
+        """Admit one normalized metadata fixture, never a real export-format parser.
+
+        The supplied handoff is a host assertion, not provider continuity proof.
+        Exact retries preserve any later incremental cursor and receipt.
+        """
+        if not self._enabled:_deny()
+        owned_transaction=False
+        pinned_db=self._host[1]
+        try:
+            self._host_check()
+            if self._store.db.in_transaction:_deny()
+            now=_utc(now);exported_at=_utc(exported_at)
+            registration=self._active(now)
+            if type(source) is not SourceRegistration or source!=registration or exported_at>now:_deny()
+            source_fingerprint=registration_fingerprint(registration)
+            handoff=_cursor(handoff_cursor)
+            if handoff is None or type(events) is not tuple or len(events)>128:_deny()
+            incoming=tuple(_event(row,registration) for row in events)
+            if any(event.at>exported_at for event in incoming):_deny()
+            manifest=core.normalize_batch(incoming,mode='archive',source_id=registration.source_id,
+                channel=registration.channel,cursor_before=None,cursor_after=handoff)
+            if (type(manifest) is not core.BatchManifest or manifest.mode!='archive'
+                or manifest.source_id!=registration.source_id or manifest.channel!=registration.channel
+                or manifest.cursor_before is not None or manifest.cursor_after!=handoff
+                or type(manifest.events) is not tuple or any(type(e) is not core.Event for e in manifest.events)
+                or set(manifest.events)!=set(incoming)):_deny()
+            _retention(manifest.events)
+            anchors=[_serialized(e) for e in manifest.events]
+            fingerprint=_hash(['customer-initial-archive:v1',source_fingerprint,exported_at.isoformat(),handoff,anchors])
+            seed=dict(version=1,registration=registration.identity,cursor=handoff,committed_cursors=[handoff],
+                events=anchors,last_receipt=dict(fingerprint=fingerprint,cursor_before=None,cursor_after=handoff))
+            encoded=_json(seed)
+            if len(encoded.encode())>MAX_STATE_BYTES:_deny()
+            self._state(encoded,registration)
+            receipt_key='customer-initial-archive:v1:'+registration.stream_hash
+            expected=dict(version=1,source_id=registration.source_id,registration_fingerprint=source_fingerprint,
+                exported_at=exported_at.isoformat(),handoff=handoff,archive_fingerprint=fingerprint,
+                seed_digest=_hash(seed),anchor_digest=_hash(anchors),count=len(anchors))
+            if self._store.db.in_transaction:_deny()
+            reader=_Reader(self._store)
+            def read():
+                return reader.state(registration.runtime_key),_archive_read(reader,receipt_key,8192)
+            initial,initial_receipt=read()
+            if (initial is None)!=(initial_receipt is None):_deny()
+            replay=initial is not None
+            if replay:
+                state,retained=self._state(initial,registration)
+                receipt=json.loads(initial_receipt,object_pairs_hook=_pairs)
+                _closed(receipt,set(expected)|{'imported_at'})
+                # bool is not an integer version/count; canonical encoding also binds types.
+                if _json({k:receipt[k] for k in expected})!=_json(expected):_deny()
+                imported=receipt['imported_at']
+                if type(imported) is not str:_deny()
+                imported_at=_utc(datetime.fromisoformat(imported))
+                if imported_at.isoformat()!=imported or not exported_at<=imported_at<=now:_deny()
+                if state['committed_cursors'][0]!=handoff or not set(manifest.events)<=set(retained):_deny()
+                if len(state['committed_cursors'])==1 and _hash(state)!=expected['seed_digest']:_deny()
+                receipt_encoded=initial_receipt
+            else:
+                receipt_encoded=_json(dict(expected,imported_at=now.isoformat()))
+                if len(receipt_encoded.encode())>8192:_deny()
+            def current():
+                if not self._enabled or self._active(now)!=source or registration_fingerprint(source)!=source_fingerprint:_deny()
+                if tuple(_event(row,source) for row in events)!=incoming:_deny()
+                self._host_check()
+            # Pin transaction control: Store.transaction targets mutable store.db,
+            # which must never commit/rollback a replacement connection.
+            self._host_check()
+            pinned_db.execute('BEGIN IMMEDIATE')
+            owned_transaction=True
+            current()
+            if read()!=(initial,initial_receipt):_deny()
+            if not replay:
+                self._store.execute('INSERT INTO runtime(key,value) VALUES(?,?)',(registration.runtime_key,encoded))
+                self._store.execute('INSERT INTO runtime(key,value) VALUES(?,?)',(receipt_key,receipt_encoded))
+            current()
+            if read()!=((initial,initial_receipt) if replay else (encoded,receipt_encoded)):_deny()
+            self._host_check()
+            pinned_db.execute('COMMIT')
+            owned_transaction=False
+            return ArchiveImportReceipt(registration.source_id,len(anchors),fingerprint,replay)
+        except BaseException as error:
+            # Only our original transaction; a replacement may belong to others.
+            if owned_transaction:
+                try:
+                    if pinned_db.in_transaction:pinned_db.rollback()
+                except BaseException:pass
+            if not isinstance(error,Exception):raise
+            raise CustomerIngestUnavailable() from None
 
     def ingest_once(self,*,now):
         if not self._enabled:_deny()
