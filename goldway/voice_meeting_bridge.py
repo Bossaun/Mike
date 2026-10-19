@@ -112,6 +112,18 @@ class VoiceAdmissionProof:
 
 
 @dataclass(frozen=True)
+class SelectedFinalSnapshot:
+    """One selected literal source, not speaker or audience authentication."""
+    key:voice.SessionKey
+    reference:FinalSegmentRef
+    text:str
+    evidence_ids:tuple[str,...]
+    token:voice.OutputToken
+    permission_fingerprint:str
+    reviewer:str
+
+
+@dataclass(frozen=True)
 class _Pending:
     ticket:ReviewTicket
     token:voice.OutputToken
@@ -128,6 +140,39 @@ class VoiceMeetingBridge:
         self._spec=spec;self._permission_callback=current_permission;self._sink=sink
         self._enabled=enabled is True;self._state=None;self._pending=None;self._exhausted=False
         self._host=(spec,_callable(current_permission),_callable(sink))
+
+    def selected_final(self,reference,*,now):
+        """Read exactly one current-epoch final; no record/ticket mutation."""
+        if not self._enabled:_deny()
+        try:
+            self._check_host();now=_utc(now)
+            previous,pending,spec=self._state,self._pending,self._spec
+            if type(reference) is not FinalSegmentRef or type(reference.key) is not voice.SessionKey:_deny()
+            for value in (reference.key.business,reference.key.source_id,reference.key.session_id,reference.segment_id):_id(value)
+            if type(reference.epoch) is not int or not 0<=reference.epoch<=1000000 or type(reference.revision) is not int or not 1<=reference.revision<=1000000:_deny()
+            ref_shape=(reference.key.business,reference.key.source_id,reference.key.session_id,reference.epoch,reference.segment_id,reference.revision)
+            permission=self._permission(now)
+            if self._state is not previous or self._pending is not pending or previous is None:_deny()
+            token=voice.output_token(previous,now=now)
+            if reference.key!=spec.key or reference.epoch!=token.epoch:_deny()
+            preview=voice.meeting_preview(previous,token,now=now)
+            if type(preview) is not voice.MeetingPreview or preview.key!=spec.key or preview.epoch!=token.epoch or preview.sequence!=token.sequence:_deny()
+            selected=[line for line in preview.lines if (line.epoch,line.segment_id,line.revision)==(reference.epoch,reference.segment_id,reference.revision)]
+            if len(selected)!=1 or type(selected[0]) is not voice.PreviewLine:_deny()
+            line=selected[0];_text(line.text)
+            if len(line.text)>2000 or type(line.evidence_ids) is not tuple or not 1<=len(line.evidence_ids)<=2:_deny()
+            for identifier in line.evidence_ids:_id(identifier)
+            self._check_host()
+            if self._permission(now)!=permission or self._state is not previous or self._pending is not pending or self._spec is not spec:_deny()
+            if (reference.key.business,reference.key.source_id,reference.key.session_id,reference.epoch,reference.segment_id,reference.revision)!=ref_shape:_deny()
+            voice.validate_output(previous,token,now=now)
+            value=[permission.key.business,permission.key.source_id,permission.key.session_id,
+                permission.reviewer,permission.revision,_utc(permission.issued_at).isoformat(),
+                _utc(permission.expires_at).isoformat(),permission.allow_text_review,permission.revoked]
+            fingerprint=hashlib.sha256(json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+            return SelectedFinalSnapshot(spec.key,reference,line.text,line.evidence_ids,token,fingerprint,permission.reviewer)
+        except VoiceBridgeUnavailable:raise
+        except Exception:raise VoiceBridgeUnavailable() from None
 
     def admission_proof(self,*,now):
         """No record/pending mutation; callbacks are optimistically rechecked.
