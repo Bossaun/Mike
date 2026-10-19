@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
+import re
 
 from .trusted_provider import SourceSpec, TrustedProviders
 
@@ -16,20 +17,28 @@ class BridgeError(ValueError):
 
 
 class TrustedSourceBridge:
+    @staticmethod
+    def validate_bindings(registry,bindings,*,business,members,existing_source_ids=()):
+        """Metadata only: no provider/clock access or initialization effects."""
+        try:
+            if type(registry) is not TrustedProviders or type(business) is not str or registry.business!=business or re.fullmatch(r'[A-Za-z0-9._-]{1,64}',business) is None:raise ValueError()
+            if type(bindings) is not tuple or len(bindings)>16 or any(type(spec) is not SourceSpec for spec in bindings):raise ValueError()
+            if len({spec.source_id for spec in bindings})!=len(bindings):raise ValueError()
+            existing=tuple(existing_source_ids)
+            if any(type(value) is not str or not value for value in existing) or len(set(existing))!=len(existing):raise ValueError()
+            ids=[]
+            for spec in bindings:
+                spec.__post_init__()
+                registered=registry._sources.get(spec.source_id)
+                if registered is None or registered.spec!=spec or not spec.audience<=members:raise ValueError()
+                ids.append('trusted:'+business+':'+spec.provider_id+':'+spec.source_id)
+            if len(existing)+len(ids)>16 or set(existing)&set(ids):raise ValueError()
+            return tuple(ids)
+        except Exception:raise BridgeError('trusted_injection_invalid') from None
+
     def __init__(self,index,registry,bindings,*,business,members):
-        if type(registry) is not TrustedProviders or type(business) is not str or registry.business!=business:
-            raise BridgeError('trusted_business_mismatch')
-        if type(bindings) is not tuple or len(bindings)>16 or any(type(spec) is not SourceSpec for spec in bindings):
-            raise BridgeError('trusted_bindings_invalid')
-        if len({spec.source_id for spec in bindings})!=len(bindings):
-            raise BridgeError('trusted_bindings_duplicate')
+        self.validate_bindings(registry,bindings,business=business,members=members)
         self.index,self.registry,self.bindings,self.business,self.members=index,registry,bindings,business,members
-        for spec in bindings:
-            # Existing registry has no public policy projection; inspect registration
-            # only, never its provider/credential table. Refresh rechecks revocation.
-            registered=registry._sources.get(spec.source_id)
-            if registered is None or registered.spec!=spec or not spec.audience<=members:
-                raise BridgeError('trusted_binding_unregistered_or_outside_audience')
         if bindings:
             index.store.execute('''CREATE TABLE IF NOT EXISTS trusted_source_versions(
                 business TEXT NOT NULL,source_id TEXT NOT NULL,version INTEGER NOT NULL,

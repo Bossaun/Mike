@@ -23,11 +23,16 @@ def fingerprint(text):
     return hashlib.sha256(' '.join(text.casefold().split()).encode()).hexdigest()
 
 class Engine:
-    def __init__(self, store, config, model, now=time.time):
+    def __init__(self, store, config, model, now=time.time, *, trusted_registry=None, trusted_sources=()):
+        from .intelligence import trusted_injection
+        trusted_injection(config,trusted_registry,trusted_sources)
         self.s, self.c, self.model, self.now = store, config, model, now
         self.b = config['business']
         from .intelligence import Intelligence, intelligence_enabled
-        self.intelligence = Intelligence(store, config) if intelligence_enabled(config) else None
+        if trusted_registry is None:
+            self.intelligence = Intelligence(store, config) if intelligence_enabled(config) else None
+        else:
+            self.intelligence = Intelligence(store,config,trusted_registry=trusted_registry,trusted_sources=trusted_sources)
         self.tz = ZoneInfo(config.get('timezone','Europe/Moscow'))
         with nullcontext() if store.db.in_transaction else store.transaction():
             start_observing(store, self.b, at=self.now(), timezone_name=self.tz.key)

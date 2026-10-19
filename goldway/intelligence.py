@@ -27,8 +27,43 @@ def readable_evidence_ids(store, config, sender, now):
     return docs | readable_work_ids(store, config, sender, docs)
 
 
+def trusted_injection(config,registry,bindings):
+    """Host-only preflight, deliberately before Store/index/memory/clock effects."""
+    if registry is None and type(bindings) is tuple and not bindings:return ()
+    try:
+        if registry is None or type(bindings) is not tuple or not 1<=len(bindings)<=16 or not intelligence_enabled(config):raise ValueError()
+        from .trusted_source_bridge import TrustedSourceBridge
+        business=config['business'];members=set(config['employees'])|set(config['admins'])
+        prefix='source:'+hashlib.sha256(business.encode()).hexdigest()+':'
+        existing=tuple(prefix+spec['id'] for spec in config['intelligence'].get('sources',[]))
+        return TrustedSourceBridge.validate_bindings(registry,bindings,business=business,
+            members={reader_key(business,sender) for sender in members},existing_source_ids=existing)
+    except Exception:raise ValueError('trusted_injection_invalid') from None
+
+
+def _owned_trusted_sources(store,business):
+    """Bounded ownership metadata only; validate every ID before any revoke."""
+    try:
+        exists=store.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trusted_source_versions' LIMIT 1").fetchone()
+        if not exists:return ()
+        rows=store.execute("""SELECT CASE WHEN typeof(business)='text' AND length(CAST(business AS BLOB))<=64 THEN business END AS business,
+            CASE WHEN typeof(source_id)='text' AND length(CAST(source_id AS BLOB))<=202 THEN source_id END AS source_id
+            FROM trusted_source_versions WHERE business=? LIMIT 65""",(business,)).fetchall()
+        if len(rows)>64:raise ValueError()
+        ids=[]
+        for row in rows:
+            source=row['source_id']
+            if row['business']!=business or type(source) is not str or re.fullmatch(r'trusted:[A-Za-z0-9._-]{1,64}:[A-Za-z0-9._-]{1,64}:[A-Za-z0-9._-]{1,64}',source) is None or source.split(':')[1]!=business:raise ValueError()
+            ids.append(source)
+        if len(set(ids))!=len(ids):raise ValueError()
+        return tuple(ids)
+    except Exception:raise ValueError('trusted_initialization_unavailable') from None
+
+
 class Intelligence:
-    def __init__(self, store, config):
+    def __init__(self, store, config, *, trusted_registry=None, trusted_sources=()):
+        trusted_ids=trusted_injection(config,trusted_registry,trusted_sources)
+        owned_ids=_owned_trusted_sources(store,config['business'])
         self.s, self.c, self.b = store, config, config['business']
         cfg = config['intelligence']
         self.memory = DialogueMemory(store, max_turns=cfg.get('history_messages',8),
@@ -50,12 +85,15 @@ class Intelligence:
             if 'reader_emails' in spec:
                 spec['reader_emails'] = {self.reader(k): v for k, v in spec['reader_emails'].items() if k in readers}
             specs.append(spec)
+        # Proved owned IDs include omitted bindings and default-None restarts.
+        for source in sorted(set(owned_ids)|set(trusted_ids)):self.index.revoke_source(source)
         # A restart/config change cannot retain an earlier permission observation.
         for row in store.rows('SELECT DISTINCT source_id FROM knowledge_documents'):
             if row['source_id'].startswith(self.prefix): self.index.revoke_source(row['source_id'])
         # Google credentials must be injected separately; never use ambient account auth.
         self.sources = ReadOnlySources(self.index, specs, {self.reader(x) for x in members},
-                                      refresh_seconds=cfg.get('refresh_seconds', 900))
+                                      refresh_seconds=cfg.get('refresh_seconds', 900),
+                                      trusted_registry=trusted_registry,trusted_sources=trusted_sources,business=self.b)
         store.execute('''CREATE TABLE IF NOT EXISTS intelligence_outbox_acl(
             outbox_id INTEGER PRIMARY KEY, business TEXT NOT NULL,
             evidence_ids TEXT NOT NULL)''')
