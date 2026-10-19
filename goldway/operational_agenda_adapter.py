@@ -7,6 +7,7 @@ fail closed: an oversized business register is unavailable, never a full report.
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
+import hashlib
 from zoneinfo import ZoneInfo
 
 from .intelligence import reader_key
@@ -37,6 +38,7 @@ class OperationalAgendaDraft:
     limited: bool = True
     metrics_status: str = 'not_supplied'
     limitation: str = LIMITATION
+    snapshot_digest: str = ''
 
     @property
     def requires_review(self):
@@ -66,6 +68,7 @@ class _ReadView:
     def __init__(self, store, config, sender):
         self.store, self.business, self.sender = store, config['business'], sender
         self.queries = self.read_rows = self.read_bytes = 0
+        self.proof = hashlib.sha256(b'operational-agenda-metadata:v1')
 
     def _read(self, sql, args, limit):
         self.queries += 1
@@ -80,6 +83,9 @@ class _ReadView:
             _fail()
         for row in rows:
             row.pop('_invalid', None)
+        # Seal only the already bounded metadata projection, never bodies or clock args.
+        canonical = sorted(json.dumps(row,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False) for row in rows)
+        self.proof.update(json.dumps([' '.join(sql.split()),canonical],ensure_ascii=False,separators=(',',':')).encode())
         return rows
 
     def rows(self, sql, args=()):
@@ -200,7 +206,7 @@ def build_agenda_preview(store, config, sender, existing_index, *, as_of, max_it
         for item in items:
             if not validate_work_snapshot(view, config, sender, fresh, item):
                 _fail()
-        return OperationalAgendaDraft(business, agenda, digest)
+        return OperationalAgendaDraft(business, agenda, digest,snapshot_digest=view.proof.hexdigest())
     except AgendaUnavailable:
         raise
     except Exception:
