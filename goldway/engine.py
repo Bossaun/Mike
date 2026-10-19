@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .daily_kpi_command import is_command as is_daily_kpi, handle as handle_daily_kpi
+            if is_daily_kpi(text):
+                if added:handle_daily_kpi(self,event_id,payload)
+                return added
             from .form_reconciliation_command import is_command as is_form_reconciliation, handle as handle_form_reconciliation
             if is_form_reconciliation(text):
                 if added:handle_form_reconciliation(self,event_id,payload)

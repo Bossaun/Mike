@@ -75,25 +75,48 @@ _WORKFLOW_HELP=(
 )
 
 
-def is_preview_help_command(text):
-    if type(text) is not str or not 0<len(text)<=128:return False
-    return ' '.join(text.casefold().split()).strip(' ?!.') in _REQUESTS
+_PAGE_TWO_HELP=(
+    'Ещё команды — страница 2.',
+    '• «Проверь дневные показатели по сценарию» — шаблон ручной проверки введённых дневных значений и явных целей. '
+    'Неизвестные значения и неполнота сохраняются; это условный сценарий, не оценка реальных сотрудников. '
+    'Ежедневные проверки и уведомления не включаются.',
+    'Напишите точную команду, получите шаблон и заполните его своими условными данными. '
+    'Сведения независимо не проверяются; рабочие системы не подключаются, учёт не меняется.',
+    'Первая страница: «Что умеешь 1».',
+)
 
 
-def build_preview_help():
+def _request_page(text):
+    if type(text) is not str or not 0<len(text)<=128:return None
+    request=' '.join(text.casefold().split()).strip(' ?!.')
+    if request in _REQUESTS:return 1
+    for page in (1,2):
+        if any(request==base+' '+str(page) for base in _REQUESTS):return page
+    return None
+
+
+def is_preview_help_command(text):return _request_page(text) is not None
+
+
+def build_preview_help(page=1):
+    if type(page) is not int or page not in (1,2):raise PreviewHelpUnavailable()
     if (type(DESCRIPTORS) is not tuple or not 1<=len(DESCRIPTORS)<=MAX_DESCRIPTORS
         or any(type(item) is not PreviewDescriptor for item in DESCRIPTORS)
         or len({item.request for item in DESCRIPTORS})!=len(DESCRIPTORS)):
         raise PreviewHelpUnavailable()
-    lines=['Со мной можно общаться обычным текстом, давать поручения, предлагать идеи и обсуждать результаты.',
-        'Для проверок по вашим данным есть шаблоны. Напишите одну из фраз — пришлю шаблон или инструкции для ввода:']
-    for item in DESCRIPTORS:
-        item.__post_init__()
-        lines.append('• «'+item.request+'» — '+item.description+'.')
-    lines.extend(['Заполните полученный шаблон и отправьте его сюда.',
-        'Эти шаблоны используют только введённые вами значения: ничего не загружают из складских или финансовых систем, '
-        'не изменяют учёт и не оформляют закупки. Результаты относятся к переданным данным.'])
-    lines.extend(['']+list(_WORKFLOW_HELP))
+    for item in DESCRIPTORS:item.__post_init__()
+    if page==2:
+        lines=list(_PAGE_TWO_HELP)
+    else:
+        lines=['Можно общаться обычным текстом, давать поручения и обсуждать результаты.',
+            'Напишите команду — получите шаблон:']
+        for item in DESCRIPTORS:
+            lines.append('• «'+item.request+'» — '+item.description+'.')
+        lines.extend(['Заполните шаблон и отправьте сюда.',
+            'Шаблоны используют только введённые вами значения: ничего не загружают из рабочих систем, '
+            'не меняют учёт и не оформляют закупки.'])
+        lines.extend(['']+list(_WORKFLOW_HELP))
+        lines.append('Ещё команды: «Что умеешь 2».')
     output='\n'.join(lines)
     if len(output.encode('utf-16-le'))//2>MAX_OUTPUT_UNITS:raise PreviewHelpUnavailable()
     return output
@@ -107,7 +130,7 @@ def handle_preview_help(engine,event_id,payload):
     intelligence=engine.intelligence
     try:scope=_authorized(engine,payload,intelligence)
     except (ValueError,TypeError,KeyError,AttributeError):return False
-    text=build_preview_help()
+    text=build_preview_help(_request_page(payload['text']))
     if _authorized(engine,payload,intelligence)!=scope:raise PreviewHelpUnavailable()
     engine.s.queue(engine.b,payload['sender'],text,'preview-help:'+event_id,engine.now(),None,
                    preferred_transport=payload['channel'])
