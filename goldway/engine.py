@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .general_summary_command import is_command as is_general_summary, handle as handle_general_summary
+            if is_general_summary(text):
+                if added:handle_general_summary(self,event_id,payload)
+                return
             from .recount_sample_command import is_command as is_recount_sample, handle as handle_recount_sample
             if is_recount_sample(text):
                 if added:handle_recount_sample(self,event_id,payload)
