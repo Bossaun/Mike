@@ -86,7 +86,8 @@ def run(e, run_seconds=None):
     register_team_bot_identity(e.c, bot)
     if bot.get('username'):e.c['bot_username']=bot['username']
     bootstrap_groups(e.s,e.c)
-    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api); dispatch.recover()
+    from .weekly_review_command import make_delivery_guard
+    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e)); dispatch.recover()
     sheets=None
     if e.c.get('sheets_write'):
         import gspread

@@ -48,9 +48,19 @@ class Telegram:
             raise RuntimeError('Telegram document download failed') from None
 
 class Dispatcher:
-    def __init__(self, store, config, telegram, now=time.time):
+    def __init__(self, store, config, telegram, now=time.time, weekly_guard=None):
         self.s,self.c,self.api,self.now=store,config,telegram,now
         self.b=config['business']
+        self.weekly_guard=weekly_guard
+
+    def _weekly_permitted(self, row, route=None, transport=None):
+        if not row['dedupe'].startswith('weekly-review:'):return True
+        from .weekly_review_command import cancel
+        try:
+            if self.weekly_guard is not None and self.weekly_guard(row,route,transport) is True:return True
+        except Exception:pass
+        cancel(self.s,self.b,row['id'])
+        return False
 
     def recover(self):
         self.s.execute("UPDATE outbox SET state='unknown',error='Process stopped during send; manual reconciliation required' WHERE business=? AND state='sending'",(self.b,))
@@ -96,20 +106,34 @@ class Dispatcher:
         for row in self.s.rows("SELECT * FROM outbox WHERE business=? AND state IN ('pending','retry','blocked') AND next_at<=? ORDER BY id LIMIT 50",(self.b,self.now())):
             if should_stop():break
             try:
+                if not self._weekly_permitted(row):continue
                 if row['dedupe'].startswith('deadline-policy:'):
                     from .deadline_policy import permit_delivery
                     if not permit_delivery(self.s,self.c,row,self.now()):continue
                 from .intelligence import delivery_permitted
                 if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
+                    if row['dedupe'].startswith('weekly-review:'):
+                        from .weekly_review_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
                     raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
-                route,transport=self.route(row['recipient'],row['preferred_transport'])
+                try:
+                    route,transport=self.route(row['recipient'],row['preferred_transport'])
+                except DeliveryError:
+                    if row['dedupe'].startswith('weekly-review:'):
+                        from .weekly_review_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
+                    raise
                 with self.s.transaction():
+                    if not self._weekly_permitted(row,route,transport):continue
                     if row['dedupe'].startswith('deadline-policy:') and not permit_delivery(self.s,self.c,row,self.now()):continue
                     # A policy guard may rebuild the body after route looked up rights.
                     if row['dedupe'].startswith('deadline-policy:'):
                         row=dict(self.s.execute('SELECT * FROM outbox WHERE business=? AND id=?',(self.b,row['id'])).fetchone())
                         if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
                             raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
+                    if row['dedupe'].startswith('weekly-review:') and not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
+                        from .weekly_review_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
                     claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
                 if not claimed: continue
                 params=dict(route,text=row['text'])
