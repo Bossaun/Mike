@@ -345,8 +345,10 @@ class Engine:
                 from .mutation_target import may_record_response
                 if eligible and len(context['tasks'])==1 and may_record_response(self,event_id,payload,context,context['tasks'][0]['id']):
                     from .deadlines import is_relative_deadline
+                    from .scheduling_dialogue import preserve_progress_check
+                    preserve_check=preserve_progress_check(self,payload,context['tasks'][0])
                     self._record_response(context['tasks'][0]['id'],sender,payload['received_at'],
-                                          progress=(self._employee_progress(payload,context['tasks'][0]) and not
+                                          progress=(not preserve_check and self._employee_progress(payload,context['tasks'][0]) and not
                                                     (is_relative_deadline(text) or
                                                      re.search(r'\b(?:напомни|напоминай)\b|\d{1,2}:\d{2}', text.casefold()))),
                                           message_at=self._message_time(payload))
@@ -721,6 +723,9 @@ class Engine:
                         capture_meeting_binding(self,event_id,p,context,result,reviewed,first_outbox_id)
                     intelligence.remember(event_id,p,context,result,scope,first_outbox_id,changed,self.now())
                     if question_draft:recheck_questions(self,p,context,question_draft.host)
+                if operator and kind=='reply' and not meeting_review:
+                    from .scheduling_dialogue import queue_progress_question
+                    queue_progress_question(self,event_id,p,context,actions,changed,before)
                 self.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?",(self.b,event_id))
                 self.s.audit(self.b,'processed',{'event':event_id,'sender':p['sender'],'tasks':changed,'summary':result.get('summary','')[:2000]},self.now())
                 if submission and (changed or result['intent']=='meeting'):

@@ -160,3 +160,110 @@ def handle_scheduling(engine, event_id, payload, context, scope):
         engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?", (engine.b, event_id))
         engine.s.audit(engine.b, 'scheduling_turn', {'event': event_id, 'task': linked, 'asking_time': asking}, engine.now())
     return True
+
+
+_RETURN_QUESTION='Когда вернуться к вам по этой задаче? Назовите время, например «через 30 минут».'
+
+
+def _progress_scope(engine,payload,task):
+    """Narrow explicit own employee progress, never model text/focus authority."""
+    if (not engine.scheduler or not engine.intelligence or payload.get('channel') not in ('bot','business')
+        or payload.get('sender') in engine.c.get('admins',()) or task.get('owner')!=payload.get('sender')
+        or task.get('status') not in ('confirmed','in_progress') or not engine._task_dialogue_turn(payload,'reply')):return False
+    from .task_card_reference import _gate
+    from .scheduling import Scheduler
+    if (type(engine.scheduler) is not Scheduler or engine.scheduler.s is not engine.s
+        or engine.scheduler.c is not engine.c or engine.scheduler.b!=engine.b):return False
+    try:_gate(engine,payload,engine.intelligence)
+    except (ValueError,TypeError,KeyError,AttributeError):return False
+    refs=engine.reference_ids(payload['text']);explicit=payload.get('task_id')
+    if (explicit and explicit!=task['id']) or (refs and refs!={task['id']}) or not (explicit==task['id'] or refs=={task['id']}):return False
+    text=re.sub(r'^\s*(?:по\s+)?задач[аеуы]?\s*(?:№|#)?\s*\d+\s*[:—,.-]?\s*','',payload['text'].casefold())
+    if engine._question_or_draft(text) or not re.match(r'^(?:я\s+)?(?:делаю|работаю|проверяю|продолжаю)\b',text):return False
+    return engine._scheduling_permitted(task['id'],payload['sender'],engine.now())
+
+
+def _future_check(engine,task):
+    return engine.s.execute("SELECT 1 FROM c07_checks WHERE business=? AND task_id=? AND owner=? AND source_id=? AND state='pending' AND at>? LIMIT 1",
+        (engine.b,task['id'],task['owner'],task['source_id'],engine.now())).fetchone() is not None
+
+
+def preserve_progress_check(engine,payload,task):
+    """Preserve a current agreed check even if a later model action is rejected.
+
+    Scope/ACL/current ownership and explicit narrow phrase are host-validated;
+    this only suppresses old ingress cancellation, never creates scheduling.
+    """
+    current=engine.s.execute('SELECT id,owner,status,source_id FROM tasks WHERE business=? AND id=?',(engine.b,task['id'])).fetchone() if engine.scheduler else None
+    return bool(current and _progress_scope(engine,payload,dict(current)) and _future_check(engine,dict(current)))
+
+
+def queue_progress_question(engine,event_id,payload,context,actions,changed,before):
+    """After a validated one-task update, queue/capture one existing C07 prompt."""
+    if not engine.s.db.in_transaction:raise ValueError('return_question_transaction')
+    if (not engine.scheduler or not engine.intelligence or len(actions)!=1 or len(changed)!=1
+        or type(actions[0]) is not dict or actions[0].get('op')!='update'):return False
+    action=actions[0]
+    allowed={'op','task_id','status','next_step','evidence','evidence_lines','set_fields','title','owner','deadline','criterion','owner_lines','deadline_lines'}
+    if not set(action)<=allowed:return False
+    # Actual response_schema carries null unchanged fields and unused line arrays.
+    # Do not mistake inert placeholders for edits; genuine mixed requests deny.
+    if any(action.get(field) is not None for field in ('title','owner','deadline','criterion')):return False
+    if any(type(action.get(field,[])) is not list or action.get(field,[]) for field in ('owner_lines','deadline_lines')):return False
+    mask=action.get('set_fields')
+    if mask is not None:
+        if (type(mask) is not list or len(mask)!=len(set(mask)) or 'status' not in mask
+            or not set(mask)<={'status','next_step'}
+            or ('next_step' not in mask and action.get('next_step') is not None)):return False
+    task_id=changed[0];previous=before.get(task_id)
+    if (not previous or action.get('task_id')!=task_id or action.get('status')!='in_progress'
+        or previous['status'] not in ('confirmed','in_progress')
+        or previous['owner']!=payload['sender'] or not _progress_scope(engine,payload,previous)):return False
+    row=engine.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(engine.b,task_id)).fetchone()
+    if not row:return False
+    task=dict(row)
+    if (task['status']!='in_progress' or task['owner']!=previous['owner'] or task['deadline']!=previous['deadline']
+        or task['source_id']!=previous['source_id'] or task['revision']!=previous['revision']+1
+        or (previous['status']=='in_progress' and all(task[k]==previous[k] for k in ('next_step','evidence')))
+        or _future_check(engine,task)):return False
+    if engine.s.execute('SELECT 1 FROM c07_checks WHERE business=? AND event_id=? LIMIT 1',(engine.b,event_id)).fetchone():return False
+    if engine.s.execute("SELECT 1 FROM outbox WHERE business=? AND recipient=? AND dedupe LIKE 'reminder:c07-prompt:%' AND state IN ('pending','retry','sending','unknown') LIMIT 1",(engine.b,payload['sender'])).fetchone():return False
+    source=payload.get('source_id') or event_id
+    if not engine.s.execute('SELECT 1 FROM task_sources WHERE business=? AND task_id=? AND source_id=?',(engine.b,task_id,source)).fetchone():return False
+    sources=engine.s.rows('SELECT source_id FROM task_sources WHERE business=? AND task_id=? LIMIT 33',(engine.b,task_id))
+    source_ids={task['source_id']}|{r['source_id'] for r in sources}
+    if len(sources)>32 or any(type(v) is not str or not 0<len(v)<=256 for v in source_ids):return False
+    marks=','.join('?' for v in source_ids)
+    alive=engine.s.rows('SELECT id,deleted FROM sources WHERE business=? AND id IN ('+marks+')',(engine.b,*sorted(source_ids)))
+    if {r['id'] for r in alive}!=source_ids or any(r['deleted']!=0 for r in alive):return False
+    # Recheck captured initialized host/current row around queue/protection/capture.
+    import json
+    from .work_context import work_id
+    from .scheduling_anchor import capture
+    from .task_card_reference import _gate
+    host=(engine.s,engine.s.db,engine.c,engine.intelligence,engine.scheduler)
+    policy=json.dumps(engine.c,sort_keys=True,ensure_ascii=False)
+    refs=engine.intelligence.task_refs(task_id)|{work_id(engine.b,task_id)}
+    def check():
+        if (engine.s is not host[0] or engine.s.db is not host[1] or engine.c is not host[2]
+            or engine.intelligence is not host[3] or engine.scheduler is not host[4]
+            or json.dumps(engine.c,sort_keys=True,ensure_ascii=False)!=policy):raise ValueError('return_question_changed')
+        _gate(engine,payload,engine.intelligence)
+        current=engine.s.execute('SELECT * FROM tasks WHERE business=? AND id=?',(engine.b,task_id)).fetchone()
+        if (not current or dict(current)!=task or not engine._scheduling_permitted(task_id,payload['sender'],engine.now())
+            or engine.intelligence.task_refs(task_id)|{work_id(engine.b,task_id)}!=refs or _future_check(engine,task)):
+            raise ValueError('return_question_changed')
+        bindings=engine.s.rows('SELECT source_id FROM task_sources WHERE business=? AND task_id=? LIMIT 33',(engine.b,task_id))
+        if len(bindings)>32 or {r['source_id'] for r in bindings}!={r['source_id'] for r in sources}:raise ValueError('return_question_changed')
+        fresh=engine.s.rows('SELECT id,deleted FROM sources WHERE business=? AND id IN ('+marks+')',(engine.b,*sorted(source_ids)))
+        if fresh!=alive:raise ValueError('return_question_changed')
+    check();key='reminder:c07-prompt:'+event_id
+    engine.s.queue(engine.b,payload['sender'],_RETURN_QUESTION,key,engine.now(),task_id,preferred_transport=payload.get('channel'))
+    own=engine.s.execute('SELECT id FROM outbox WHERE business=? AND dedupe=?',(engine.b,key)).fetchone()
+    if not own:raise ValueError('return_question_missing')
+    def queued():
+        row=engine.s.execute('SELECT text,recipient,task_id,preferred_transport,dedupe FROM outbox WHERE business=? AND id=?',(engine.b,own[0])).fetchone()
+        if (not row or tuple(row)!=(_RETURN_QUESTION,payload['sender'],task_id,payload.get('channel'),key)):
+            raise ValueError('return_question_changed')
+    check();queued();engine.intelligence.protect_outbox(own[0],refs);check();queued();capture(engine,event_id,payload,task_id,own[0]);check();queued()
+    return True
