@@ -114,6 +114,15 @@ class SourceProof:
     state_present:bool
 
 
+@dataclass(frozen=True)
+class PromiseEvaluation:
+    preview:core.Preview
+    source_proof:SourceProof
+    anchor_seals:tuple[tuple[str,str],...]
+    requires_review:bool=field(default=True,init=False)
+    live_authorized:bool=field(default=False,init=False)
+
+
 class _Reader:
     def __init__(self,store):self._store=store;self.queries=0;self.rows=0;self.bytes=0
 
@@ -268,6 +277,57 @@ class CustomerIngest:
             fingerprint=registration_fingerprint(registration)
             digest=_hash(['customer-ingest-state-proof:v1',fingerprint,initial])
             return SourceProof(registration.source_id,registration.business,registration.channel,fingerprint,digest,initial is not None)
+        except CustomerIngestUnavailable:raise
+        except Exception:raise CustomerIngestUnavailable() from None
+
+    def preview_promises(self,conversation,*,now,expected_store,promises,results):
+        """Actual promise evaluator over current admitted metadata; no raw events."""
+        if not self._enabled:_deny()
+        try:
+            if expected_store is not self._host[0] or expected_store is not self._store:_deny()
+            now=_utc(now);registration=self._active(now);reader=_Reader(self._store)
+            if type(conversation) is not core.Conversation or conversation.source_id!=registration.source_id or conversation.channel!=registration.channel:_deny()
+            for value in (conversation.customer_id,conversation.thread_id):_id(value)
+            if type(promises) is not tuple or len(promises)>8 or type(results) is not tuple or len(results)>16:_deny()
+            for row in promises:
+                if type(row) is not core.Promise or row.conversation!=conversation:_deny()
+                for value in (row.id,row.event_id,row.owner_id):_id(value)
+                if row.due_at is not None:_utc(row.due_at)
+                if type(row.confirmed) is not bool:_deny()
+            for row in results:
+                if type(row) is not core.PromiseResult or row.conversation!=conversation:_deny()
+                for value in (row.id,row.promise_id,row.event_id):_id(value)
+                if type(row.confirmed) is not bool:_deny()
+            initial=reader.state(registration.runtime_key);state,retained=self._state(initial,registration)
+            selected=tuple(row for row in retained if row.conversation==conversation)
+            preview=core.promise_preview(selected,promises,results,now=now,dispositions=())
+            if type(preview) is not core.Preview or type(preview.candidates) is not tuple or type(preview.blocked) is not tuple or len(preview.candidates)+len(preview.blocked)>len(promises):_deny()
+            identifiers={p.id for p in promises}
+            for row in preview.candidates:
+                if type(row) is not core.Candidate or row.conversation!=conversation or row.kind!='promise' or row.target_id not in identifiers or row.draft_only is not True:_deny()
+                for value in (row.id,row.target_id,row.owner_id):_id(value)
+                if type(row.evidence_ids) is not tuple or not 1<=len(row.evidence_ids)<=3 or type(row.draft) is not str or len(row.draft)>1000:_deny()
+                for value in row.evidence_ids:_id(value)
+                _utc(row.due_at)
+            for row in preview.blocked:
+                if type(row) is not core.Blocked or row.conversation!=conversation or row.target_id not in identifiers:_deny()
+                _id(row.target_id);_id(row.reason)
+            referenced={row.event_id for row in promises}|{row.event_id for row in results}
+            if len(referenced)>24:_deny()
+            events={row.id:row for row in selected};seals=[]
+            for identifier in sorted(referenced):
+                event=events.get(identifier)
+                if event is None or event.direction!='outgoing':_deny()
+                seals.append((identifier,_hash(['customer-promise-anchor:v1',
+                    [conversation.customer_id,conversation.channel,conversation.thread_id,conversation.source_id],
+                    event.id,event.direction,_utc(event.at).isoformat(),event.confirmed,event.reply_to,event.evidence_id])))
+            if self._active(now)!=registration:_deny()
+            current=reader.state(registration.runtime_key);self._state(current,registration)
+            if current!=initial:_deny()
+            self._host_check();fingerprint=registration_fingerprint(registration)
+            proof=SourceProof(registration.source_id,registration.business,registration.channel,fingerprint,
+                _hash(['customer-ingest-state-proof:v1',fingerprint,initial]),initial is not None)
+            return PromiseEvaluation(preview,proof,tuple(seals))
         except CustomerIngestUnavailable:raise
         except Exception:raise CustomerIngestUnavailable() from None
 
