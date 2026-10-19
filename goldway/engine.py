@@ -242,6 +242,10 @@ class Engine:
             if is_publication_gap(text):
                 if added:handle_publication_gap(self,event_id,payload)
                 return added
+            from .customer_unanswered_command import is_command as is_customer_unanswered, handle as handle_customer_unanswered
+            if is_customer_unanswered(text):
+                if added:handle_customer_unanswered(self,event_id,payload)
+                return added
             from .customer_product_draft_command import is_command as is_product_draft, handle as handle_product_draft
             if is_product_draft(text):
                 if added:handle_product_draft(self,event_id,payload)
