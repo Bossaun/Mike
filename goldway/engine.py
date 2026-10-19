@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .customer_touch_command import is_command as is_customer_touch, handle as handle_customer_touch
+            if is_customer_touch(text):
+                if added:handle_customer_touch(self,event_id,payload)
+                return added
             from .customer_product_draft_command import is_command as is_product_draft, handle as handle_product_draft
             if is_product_draft(text):
                 if added:handle_product_draft(self,event_id,payload)
