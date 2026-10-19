@@ -117,12 +117,43 @@ class Store:
 
     @contextmanager
     def transaction(self):
-        self.execute('BEGIN IMMEDIATE')
+        connection = self.db
+        # An existing caller-owned transaction must not become ours on failure.
+        if connection.in_transaction:
+            raise sqlite3.OperationalError('cannot start a transaction within a transaction')
+        owned = False
         try:
+            try:
+                self.execute('BEGIN IMMEDIATE')
+            finally:
+                # A stable execute hook can open BEGIN and then raise. Capture
+                # ownership even then, without masking that primary exception.
+                try:
+                    owned = connection.in_transaction
+                except BaseException:
+                    pass
+            if self.db is not connection:
+                raise RuntimeError('store_transaction_connection_changed')
+            if not owned:
+                raise RuntimeError('store_transaction_begin_unavailable')
             yield
+            if self.db is not connection:
+                raise RuntimeError('store_transaction_connection_changed')
+            # Keep stable self.execute COMMIT interception compatible.
             self.execute('COMMIT')
+            if connection.in_transaction:
+                raise RuntimeError('store_transaction_commit_incomplete')
+            if self.db is not connection:
+                raise RuntimeError('store_transaction_connection_changed')
         except BaseException:
-            self.execute('ROLLBACK')
+            if owned:
+                try:
+                    if connection.in_transaction:
+                        connection.rollback()
+                except BaseException:
+                    # Closed/fatal connections may prevent cleanup. Preserve the
+                    # original failure; never touch a replacement or claim undo.
+                    pass
             raise
 
     def event(self, business, id, kind, payload):
