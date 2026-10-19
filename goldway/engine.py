@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .table_plan_preview_command import is_command as is_table_plan_preview, handle as handle_table_plan_preview
+            if is_table_plan_preview(text):
+                if added:handle_table_plan_preview(self,event_id,payload)
+                return added
             from .daily_kpi_command import is_command as is_daily_kpi, handle as handle_daily_kpi
             if is_daily_kpi(text):
                 if added:handle_daily_kpi(self,event_id,payload)
