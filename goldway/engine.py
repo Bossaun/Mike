@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .barter_measurement_command import is_command as is_barter_measurement, handle as handle_barter_measurement
+            if is_barter_measurement(text):
+                if added:handle_barter_measurement(self,event_id,payload)
+                return added
             from .customer_touch_reconciliation_command import is_command as is_touch_reconciliation, handle as handle_touch_reconciliation
             if is_touch_reconciliation(text):
                 if added:handle_touch_reconciliation(self,event_id,payload)
