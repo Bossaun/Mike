@@ -6,8 +6,8 @@ one allowlisted I04 reader and TWO actual I37 loads (five readers each):
 seven readers <=28 MiB. Each Reader <=4 MiB/8192 rows/2048 queries.
 Only the initialized host may inject the guard; no constructors or refreshes.
 """
-from dataclasses import asdict
-from datetime import date, timedelta
+from dataclasses import asdict,dataclass,field
+from datetime import date, timedelta,datetime,timezone
 import json
 import re
 
@@ -140,9 +140,10 @@ def _typed(value):
     return json.loads(json.dumps(asdict(value), default=str, sort_keys=True))
 
 
-def _proof(engine, code, payload, inputs, reader, reported):
+def _proof(engine, code, payload, inputs, reader, reported, registration_out=None):
     scope, policy = binding._gate(engine, payload, engine.intelligence)
     registration = binding._load(reader, scope, code)
+    if registration_out is not None:registration_out.append((scope,policy,registration))
     refs, snapshots = set(), []
     if not 1 <= len(inputs.task_bindings) <= 5:
         _deny()
@@ -214,6 +215,92 @@ def _same_host(engine,host):
         _deny()
 
 
+
+
+@dataclass(frozen=True)
+class RegisteredWeekIdentity:
+    code:str
+    meeting_on:date
+    expires_at:int|float
+    scope_hash:str
+    policy_seal:str
+    registration_seal:str
+@dataclass(frozen=True)
+class RegisteredWeekSnapshot:
+    identity:RegisteredWeekIdentity
+    start:date
+    end:date
+    draft:adapter.WeeklyDraft
+    pages:tuple[str,...]
+    refs:tuple[str,...]
+    proof:str
+    report_proof:str
+    as_of:int|float
+    requires_review:bool=field(default=True,init=False)
+    live_authorized:bool=field(default=False,init=False)
+
+def _identity(code,on,scope,policy,registration):
+    if registration.get('code')!=code or registration.get('on')!=on.isoformat():_deny()
+    return RegisteredWeekIdentity(code,on,registration['expiry'],_hash(scope),policy,_hash(['registered-week-identity:v1',scope,policy,registration]))
+
+def _public_scope(engine,code,payload):
+    from .engine import Engine
+    from .store import Store
+    from .intelligence import Intelligence
+    from .knowledge import KnowledgeIndex
+    if (type(engine) is not Engine or type(engine.s) is not Store or type(engine.intelligence) is not Intelligence
+        or type(engine.intelligence.index) is not KnowledgeIndex or type(payload) is not dict
+        or set(payload)!={'sender','channel','source_id'} or type(code) is not str or re.fullmatch('MB-[0-9a-f]{16}',code) is None):_deny()
+    request=dict(payload)
+    if any(type(v) is not str or not v or len(v)>1024 for v in request.values()) or len(json.dumps(request).encode())>2048:_deny()
+    host=_host(engine);_same_host(engine,host);scope,policy=binding._gate(engine,request,host[3])
+    return host,request,scope,policy,engine.s.db,engine.now
+
+def _public_check(engine,host,request,payload,scope,policy,connection,clock):
+    _same_host(engine,host)
+    if engine.s.db is not connection or engine.now is not clock or payload!=request or binding._gate(engine,request,host[3])!=(scope,policy):_deny()
+
+def registered_week_identity(engine,code,payload):
+    host,request,scope,policy,connection,clock=_public_scope(engine,code,payload)
+    reader=_Reader(host[0]);inputs=binding.registered_inputs(engine,code,request)
+    registration=binding._load(reader,scope,code);identity=_identity(code,inputs.meeting.on,scope,policy,registration)
+    _public_check(engine,host,request,payload,scope,policy,connection,clock)
+    current=binding._load(reader,scope,code)
+    fresh=binding.registered_inputs(engine,code,request)
+    _public_check(engine,host,request,payload,scope,policy,connection,clock)
+    if fresh!=inputs or _identity(code,fresh.meeting.on,scope,policy,current)!=identity:_deny()
+    return identity
+
+def build_registered_weekly_review(engine,code,payload,*,start,end):
+    if type(start) is not date or type(end) is not date or end-start!=timedelta(days=7):_deny()
+    host,request,scope,policy,connection,clock=_public_scope(engine,code,payload)
+    reader=_Reader(host[0]);inputs,reported,initial,refs,report_digest,draft,pages,identity=_build_pass(engine,code,request,start,end,host,reader)
+    _public_check(engine,host,request,payload,scope,policy,connection,clock)
+    fresh=binding.registered_inputs(engine,code,request);fresh_reported=reports.reported_inputs(engine,code,request)
+    if fresh!=inputs or fresh_reported!=reported or _proof(engine,code,request,fresh,reader,fresh_reported)!=(initial,refs,report_digest):_deny()
+    _public_check(engine,host,request,payload,scope,policy,connection,clock)
+    return RegisteredWeekSnapshot(identity,start,end,draft,tuple(pages),refs,initial,report_digest,draft.as_of)
+
+def _build_pass(engine,code,payload,start,end,host,reader):
+    store=host[0]
+    inputs = binding.registered_inputs(engine,code,payload)
+    reported = reports.reported_inputs(engine,code,payload)
+    _same_host(engine,host)
+    registration=[]
+    initial, refs, report_digest = _proof(engine,code,payload,inputs,reader,reported,registration)
+    draft = adapter.project_week(_ReadView(store),engine.c,payload['sender'],meeting=inputs.meeting,
+        start=start,end=end,task_bindings=inputs.task_bindings,result_bindings=reported.result_bindings,sources=reported.sources,
+        document_ids=inputs.document_ids,meeting_evidence_ids=inputs.meeting_evidence_ids,
+        meeting_anchor_confirmed=True,now=engine.now())
+    pages = render.render_weekly_draft(draft)
+    if reported.result_bindings:
+        pages = [ATTRIBUTION+'\n\n'+page for page in pages]
+    if not 1 <= len(pages) <= 8 or sum(render._units(p) for p in pages)>24000 or any(render._units(p)>3500 for p in pages):
+        _deny()
+    identity=_identity(code,inputs.meeting.on,*registration[0])
+    return inputs,reported,initial,refs,report_digest,draft,pages,identity
+
+
 def handle(engine, event_id, payload):
     host=_host(engine)
     store=host[0]
@@ -228,19 +315,7 @@ def handle(engine, event_id, payload):
         scope, _ = binding._gate(engine,payload,engine.intelligence)
         reader = _Reader(store)
         _barrier(reader,engine.b,scope,event_id)
-        inputs = binding.registered_inputs(engine,code,payload)
-        reported = reports.reported_inputs(engine,code,payload)
-        _same_host(engine,host)
-        initial, refs, report_digest = _proof(engine,code,payload,inputs,reader,reported)
-        draft = adapter.project_week(_ReadView(store),engine.c,payload['sender'],meeting=inputs.meeting,
-            start=start,end=end,task_bindings=inputs.task_bindings,result_bindings=reported.result_bindings,sources=reported.sources,
-            document_ids=inputs.document_ids,meeting_evidence_ids=inputs.meeting_evidence_ids,
-            meeting_anchor_confirmed=True,now=engine.now())
-        pages = render.render_weekly_draft(draft)
-        if reported.result_bindings:
-            pages = [ATTRIBUTION+'\n\n'+page for page in pages]
-        if not 1 <= len(pages) <= 8 or sum(render._units(p) for p in pages)>24000 or any(render._units(p)>3500 for p in pages):
-            _deny()
+        inputs,reported,initial,refs,report_digest,draft,pages,_identity_unused = _build_pass(engine,code,payload,start,end,host,reader)
         # Persist minimal actual request metadata; no text/transcript duplicates.
         if type(event_id) is not str or not 0<len(event_id.encode())<=1024:
             _deny()
