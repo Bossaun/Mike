@@ -234,6 +234,10 @@ class Engine:
             if is_own_task_overview(text):
                 if added:handle_own_task_overview(self,event_id,payload)
                 return added
+            from .customer_product_draft_command import is_command as is_product_draft, handle as handle_product_draft
+            if is_product_draft(text):
+                if added:handle_product_draft(self,event_id,payload)
+                return added
             from .promotion_preview_command import is_promotion_command, handle_promotion_preview
             if is_promotion_command(text):
                 if added:handle_promotion_preview(self,event_id,payload)
