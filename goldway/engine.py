@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .recount_sample_command import is_command as is_recount_sample, handle as handle_recount_sample
+            if is_recount_sample(text):
+                if added:handle_recount_sample(self,event_id,payload)
+                return added
             from .procurement_anomaly_command import is_command as is_procurement_anomaly, handle as handle_procurement_anomaly
             if is_procurement_anomaly(text):
                 if added:handle_procurement_anomaly(self,event_id,payload)
