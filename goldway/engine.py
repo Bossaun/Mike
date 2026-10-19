@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .form_reconciliation_command import is_command as is_form_reconciliation, handle as handle_form_reconciliation
+            if is_form_reconciliation(text):
+                if added:handle_form_reconciliation(self,event_id,payload)
+                return added
             from .weekly_sales_command import is_command as is_weekly_sales, handle as handle_weekly_sales
             if is_weekly_sales(text):
                 if added:handle_weekly_sales(self,event_id,payload)
