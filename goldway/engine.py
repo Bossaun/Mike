@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .procurement_anomaly_command import is_command as is_procurement_anomaly, handle as handle_procurement_anomaly
+            if is_procurement_anomaly(text):
+                if added:handle_procurement_anomaly(self,event_id,payload)
+                return added
             from .table_conflict_command import is_command as is_table_conflict, handle as handle_table_conflict
             if is_table_conflict(text):
                 if added:handle_table_conflict(self,event_id,payload)
