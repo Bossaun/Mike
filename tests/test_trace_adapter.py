@@ -118,12 +118,18 @@ def test_every_aggregate_query_has_business_predicate_and_no_payload_select():
     reads=[];store.db.set_trace_callback(lambda sql:reads.append(sql) if sql.lstrip().upper().startswith('SELECT') else None)
     engine.reply('command','test_operator','/trace',channel='bot')
     store.db.set_trace_callback(None)
-    assert len(reads)==5
-    for sql in reads:
+    assert len(reads)==6
+    for sql in reads[:5]:
         lower=sql.lower()
         assert "where business='goldway'" in lower
+    for sql in reads:
+        lower=sql.lower()
         assert not any(field in lower for field in ['payload','audit','source_id','recipient','select *','reserved_cost','provider'])
         assert SECRET not in sql
+    from goldway.trace_adapter import _action_key
+    journal=reads[5].lower()
+    assert "from runtime where key='"+_action_key(engine.b)+"' limit 2" in journal
+    assert "typeof(value)='text'" in journal and 'length(cast(value as blob))<=65536' in journal
 
 
 def test_cross_business_rows_do_not_change_same_business_snapshot():

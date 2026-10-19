@@ -482,6 +482,8 @@ class Engine:
         from .mutation_target import capture as capture_target, MutationAmbiguous, clarify as clarify_target
         from .meeting_questions import (capture as capture_questions, validate as validate_questions,
             MeetingQuestionsInvalid, check_bundle, queue as queue_questions, recheck as recheck_questions, clarify as clarify_questions)
+        from .trace_adapter import begin_action_trace,proposal_action_trace,committed_action_trace,failed_action_trace
+        action_trace=None
         question_host=None;question_draft=None;question_intelligence=self.intelligence
         try:
             from .answer_rewrite import is_rewrite_request, handle_answer_rewrite
@@ -562,7 +564,12 @@ class Engine:
                     context['task_overview']={status:sum(t['status']==status for t in visible) for status in STATUSES}
                     context['availability']=self.c.get('availability','development')
                 direct=basic_reply(p['text']) if context['kind']=='conversation' and not intelligence else None
-                result=({'actions':[],'summary':'Объяснены возможности помощника.','reply_text':direct} if direct else self.model.propose(context))
+                if direct:
+                    result={'actions':[],'summary':'Объяснены возможности помощника.','reply_text':direct}
+                else:
+                    action_trace=begin_action_trace(self,event_id,context)
+                    result=self.model.propose(context)
+                    proposal_action_trace(self,action_trace,result)
                 if mutation_guard is not None and context.get('kind')!='operator_chat':raise MutationAmbiguous()
                 if context['kind']=='conversation' and result.get('actions'):
                     raise ValueError('General conversation cannot modify tasks')
@@ -572,6 +579,7 @@ class Engine:
                 try:
                     for action in result['actions']:permit_action(self,p,action)
                 except ConsentAmbiguous:
+                    failed_action_trace(self,action_trace,rejected=True)
                     with self.s.transaction():clarify(self,event_id,p)
                     return
             if intelligence:
@@ -606,6 +614,7 @@ class Engine:
                     try:
                         if resolve(self,event_id,p)!=consent_anchor:raise ConsentAmbiguous()
                     except ConsentAmbiguous:
+                        failed_action_trace(self,action_trace,rejected=True)
                         clarify(self,event_id,p)
                         return
                 source=p.get('source_id') or event_id
@@ -731,13 +740,17 @@ class Engine:
                 if submission and (changed or result['intent']=='meeting'):
                     self.s.execute('INSERT OR IGNORE INTO runtime(key,value) VALUES(?,?)',
                         (f'submission:{self.b}:{p["sender"]}:{fingerprint(p["text"])}',json.dumps({'tasks':[id for id in dict.fromkeys(changed) if id not in context.get('restricted_proposal_ids',set())],'intent':result['intent']})))
+                committed_action_trace(self,action_trace,len(changed),first_outbox_id)
         except MeetingQuestionsInvalid:
+            failed_action_trace(self,action_trace,rejected=True)
             with self.s.transaction():clarify_questions(self,event_id,p,question_intelligence)
             return
         except MutationAmbiguous:
+            failed_action_trace(self,action_trace,rejected=True)
             with self.s.transaction():clarify_target(self,event_id,p)
             return
         except Exception as exc:
+            failed_action_trace(self,action_trace)
             self.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(event_error(exc),self.b,event_id))
             if kind=='reply':
                 notice=exc.notice if isinstance(exc,ClarificationRequired) else 'Я получил сообщение, но сейчас не могу его обработать. Попробуйте ещё раз чуть позже.'
