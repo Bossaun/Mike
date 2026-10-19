@@ -5,6 +5,10 @@ import json
 import re
 
 
+# Host-only canonical sources readable solely through a scoped I37 receipt.
+# Exclude by metadata inside SQL, BEFORE any generic task-result body transfer.
+PRIVATE_RESULT_SOURCE_PREFIX = 'private-dated-result:v1:'
+
 MAX_QUERY_CHARS = 2048
 MAX_RESULT_BYTES = 2400
 MAX_SOURCE_BYTES = 65536
@@ -71,8 +75,10 @@ def registered_result(store, business, task_id, revision):
              THEN s.body END AS body
         FROM task_sources ts LEFT JOIN sources s
           ON s.business=ts.business AND s.id=ts.source_id
-        WHERE ts.business=? AND ts.task_id=? ORDER BY ts.source_id LIMIT ?''',
-        (MAX_SOURCE_BYTES, business, task_id, MAX_LINKED_SOURCES + 1))
+        WHERE ts.business=? AND ts.task_id=?
+          AND substr(ts.source_id,1,?) != ? ORDER BY ts.source_id LIMIT ?''',
+        (MAX_SOURCE_BYTES, business, task_id, len(PRIVATE_RESULT_SOURCE_PREFIX),
+         PRIVATE_RESULT_SOURCE_PREFIX, MAX_LINKED_SOURCES + 1))
     if not sources or len(sources) > MAX_LINKED_SOURCES:
         return None
     match = None

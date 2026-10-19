@@ -161,6 +161,10 @@ class Engine:
                 if added:handle_weekly_review(self,event_id,payload)
                 return added
             from .personal_reference import is_personal_reference, handle_personal_reference
+            from .dated_result import is_dated_result, handle as handle_dated_result
+            if is_dated_result(text):
+                if added:handle_dated_result(self,event_id,payload)
+                return added
             from .meeting_binding import is_binding_command, handle as handle_meeting_binding
             if is_binding_command(text):
                 if added:handle_meeting_binding(self,event_id,payload)
