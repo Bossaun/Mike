@@ -237,3 +237,47 @@ def handle_task_card(engine, event_id, payload):
             from .task_card_reference import remember_card
             remember_card(engine, event_id, payload, draft, row['id'], intelligence=intelligence)
     engine.s.execute("UPDATE events SET state='done',error=NULL WHERE business=? AND id=?", (engine.b, event_id))
+
+
+@dataclass(frozen=True)
+class TaskBriefSource:
+    task_id: str
+    public_number: int
+    title: str
+    deadline: str | None
+    criterion: str
+    status: str
+    evidence_ids: tuple[str, ...]
+    snapshot_digest: str
+
+
+def build_task_brief_source(store, config, sender, existing_index, *, clock, number, reader=None):
+    """Typed exact task metadata; same bounded permission-first snapshot twice."""
+    try:
+        if not callable(clock) or type(number) is not int or not 1 <= number <= 999999999:
+            _fail()
+        connection = store.db
+        snapshot_method = _snapshot
+        now = clock()
+        if store.db is not connection:
+            _fail()
+        policy = _gate(config, sender, existing_index, store, now)
+        reader = reader if reader is not None else _Reader(store)
+        if getattr(reader, 'store', None) is not store:
+            _fail()
+        initial = _snapshot(reader, store, config, sender, existing_index, now, number, None)
+        final_now = clock()
+        if (store.db is not connection or type(final_now) not in (int, float)
+                or not math.isfinite(final_now) or final_now < now):
+            _fail()
+        final = _snapshot(reader, store, config, sender, existing_index, final_now, number, None)
+        if (final != initial or store.db is not connection or _snapshot is not snapshot_method
+                or _gate(config, sender, existing_index, store, final_now) != policy):
+            _fail()
+        task, refs, fingerprint = initial
+        return TaskBriefSource(task['id'], task['public_number'], task['title'], task['deadline'],
+                               task['criterion'], task['status'], refs, fingerprint)
+    except CardUnavailable:
+        raise
+    except Exception:
+        raise CardUnavailable() from None
