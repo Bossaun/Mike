@@ -89,7 +89,8 @@ def run(e, run_seconds=None):
     from .weekly_review_command import make_delivery_guard
     from .personal_reference_discovery import make_delivery_guard as make_reference_list_guard
     from .own_impediments import make_delivery_guard as make_impediments_guard
-    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e),personal_list_guard=make_reference_list_guard(e),own_impediments_guard=make_impediments_guard(e)); dispatch.recover()
+    from .design_brief_command import make_task_brief_guard
+    updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e),personal_list_guard=make_reference_list_guard(e),own_impediments_guard=make_impediments_guard(e),task_brief_guard=make_task_brief_guard(e)); dispatch.recover()
     sheets=None
     if e.c.get('sheets_write'):
         import gspread
