@@ -99,6 +99,19 @@ class VoiceReviewBundle:
 
 
 @dataclass(frozen=True)
+class VoiceAdmissionProof:
+    """Sampled current input metadata, not capture consent or a frame grant."""
+    key:voice.SessionKey
+    token:voice.OutputToken
+    permission_fingerprint:str
+    started_at:datetime
+    expires_at:datetime
+    last_at:datetime
+    accept_after:datetime
+    record_count:int
+
+
+@dataclass(frozen=True)
 class _Pending:
     ticket:ReviewTicket
     token:voice.OutputToken
@@ -115,6 +128,32 @@ class VoiceMeetingBridge:
         self._spec=spec;self._permission_callback=current_permission;self._sink=sink
         self._enabled=enabled is True;self._state=None;self._pending=None;self._exhausted=False
         self._host=(spec,_callable(current_permission),_callable(sink))
+
+    def admission_proof(self,*,now):
+        """No record/pending mutation; callbacks are optimistically rechecked.
+
+        A lazy empty session is projected without saving it. The proof carries
+        neither transcript nor an authorization to capture real audio.
+        """
+        if not self._enabled:_deny()
+        try:
+            self._check_host();now=_utc(now)
+            previous,pending,spec=self._state,self._pending,self._spec
+            permission=self._permission(now)
+            if self._state is not previous or self._pending is not pending:_deny()
+            state=previous if previous is not None else voice.start_session(spec)
+            token=voice.output_token(state,now=now)
+            self._check_host()
+            if self._permission(now)!=permission or self._state is not previous or self._pending is not pending or self._spec is not spec:_deny()
+            voice.validate_output(state,token,now=now)
+            value=[permission.key.business,permission.key.source_id,permission.key.session_id,
+                permission.reviewer,permission.revision,_utc(permission.issued_at).isoformat(),
+                _utc(permission.expires_at).isoformat(),permission.allow_text_review,permission.revoked]
+            fingerprint=hashlib.sha256(json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+            return VoiceAdmissionProof(spec.key,token,fingerprint,spec.started_at,spec.expires_at,
+                state.last_at,state.accept_after,len(state.records))
+        except VoiceBridgeUnavailable:raise
+        except Exception:raise VoiceBridgeUnavailable() from None
 
     def _check_host(self):
         spec,permission,sink=self._host
