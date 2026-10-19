@@ -96,6 +96,24 @@ class IngestReceipt:
     live_authorized:bool=field(default=False,init=False)
 
 
+def registration_fingerprint(registration):
+    """Canonical metadata fingerprint; host assertion, never provider authority."""
+    if type(registration) is not SourceRegistration:_deny()
+    registration.__post_init__()
+    return _hash(['customer-ingest-registration:v1',registration.identity,
+                  _utc(registration.valid_from).isoformat(),_utc(registration.expires_at).isoformat(),registration.revoked])
+
+
+@dataclass(frozen=True)
+class SourceProof:
+    source_id:str
+    business:str
+    channel:str
+    registration_fingerprint:str
+    state_digest:str
+    state_present:bool
+
+
 class _Reader:
     def __init__(self,store):self._store=store;self.queries=0;self.rows=0;self.bytes=0
 
@@ -233,6 +251,23 @@ class CustomerIngest:
                 if self._active(now)!=registration or reader.state(registration.runtime_key)!=expected:_deny()
                 self._host_check()
             return IngestReceipt(registration.source_id,cursor if replay or no_op else after,len(manifest.events),fingerprint,replay,no_op)
+        except CustomerIngestUnavailable:raise
+        except Exception:raise CustomerIngestUnavailable() from None
+
+    def source_proof(self,*,now,expected_store):
+        """Read-only metadata proof for the exact captured Store; no raw state."""
+        if not self._enabled:_deny()
+        try:
+            if expected_store is not self._host[0] or expected_store is not self._store:_deny()
+            now=_utc(now);registration=self._active(now);reader=_Reader(self._store)
+            initial=reader.state(registration.runtime_key);self._state(initial,registration)
+            if self._active(now)!=registration:_deny()
+            current=reader.state(registration.runtime_key);self._state(current,registration)
+            if current!=initial:_deny()
+            self._host_check()
+            fingerprint=registration_fingerprint(registration)
+            digest=_hash(['customer-ingest-state-proof:v1',fingerprint,initial])
+            return SourceProof(registration.source_id,registration.business,registration.channel,fingerprint,digest,initial is not None)
         except CustomerIngestUnavailable:raise
         except Exception:raise CustomerIngestUnavailable() from None
 
