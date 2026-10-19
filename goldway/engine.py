@@ -250,6 +250,10 @@ class Engine:
             if is_customer_unanswered(text):
                 if added:handle_customer_unanswered(self,event_id,payload)
                 return added
+            from .influencer_roi_command import is_command as is_influencer_roi, handle as handle_influencer_roi
+            if is_influencer_roi(text):
+                if added:handle_influencer_roi(self,event_id,payload)
+                return added
             from .placement_report_due_command import is_command as is_placement_report_due, handle as handle_placement_report_due
             if is_placement_report_due(text):
                 if added:handle_placement_report_due(self,event_id,payload)
