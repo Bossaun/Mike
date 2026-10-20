@@ -21,7 +21,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-RUN='20261020-a'
+RUN='20261020-b'
 RUN_DIRECTORY=Path('/data/public-chain')
 MARKER=RUN_DIRECTORY/(RUN+'.started')
 PROBE=Path('/app/operations/public_chain/probe.py')
@@ -112,7 +112,7 @@ def _consume():
     descriptor=os.open(MARKER,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
     try:
         os.fchmod(descriptor,0o600)
-        data=b'goldway-public-chain-v1 20261020-a started\n'
+        data=b'goldway-public-chain-v1 20261020-b started\n'
         _require(os.write(descriptor,data)==len(data),'marker_failed')
         os.fsync(descriptor)
     finally:os.close(descriptor)

@@ -1,6 +1,7 @@
 {
   "format": "provider-chain-source-freeze-v1",
-  "base_sha": "aa0548faf8461fbbacddfc41ddcd5313974bd335",
+  "base_sha": "4160140f52927e77052d6cd4ebe278799d48306a",
+  "reason": "Confirmed actual turn2 incomplete explanation and turn1 unsupported origin; reviewed prompt fix, distinct root-approved once attempt b, no automatic retry",
   "files": {
     "goldway/__init__.py": "fb18427c4d5b188dadf2ed4822721a50fe97bda0ff770faa01f1149cc7d55b9d",
     "goldway/agenda_command.py": "92dac389a6e2455113e760863c035a555e7359b65ad7a9369dc42d71333474b4",
@@ -60,7 +61,7 @@
     "goldway/meeting_review.py": "9b56bee805314083be90a5414335f0530b31119163d5be1ada813ac9778c56db",
     "goldway/meeting_review_render.py": "4ff04a822b46125f4e7ca0550efee9d2cc7727fb1463af478a70ce257614a2df",
     "goldway/meeting_week_adapter.py": "fadb3b126d8d27d2e466d3bf8f9a7b31560cdbfe1a9170f72161e8622a988e4d",
-    "goldway/model.py": "e45de77e03c9a38b4f7413f7d541a988a5fb42d0fe8cc3d0a5b9e39eab9ccb6f",
+    "goldway/model.py": "364d3d0991d642d7219ed4b8cebf2c1706b6b6385bf156d929385bb248ffda5c",
     "goldway/model_trace.py": "fd3a74090cef14d9bae42d524241ec21ae7fed7965e1b011fb859b2b67ba2e5e",
     "goldway/monthly_task_history.py": "7ce4d419a0ac9a8c412a4c41175741b7d8b9ef44f779ec89eb50a834f860b652",
     "goldway/morning_digest_capture.py": "d2f89c27bd69d1053f81b707913e20965c5297e8dbee40d2bc9bd67685c9333b",
@@ -82,7 +83,7 @@
     "goldway/promotion_explanation_review.py": "f4ba2ead5f455dfc16b1ac62b2b19c669a2b37dc28b3d5e5ed544be047fb5e32",
     "goldway/promotion_preview_command.py": "45e3ba1706a091c74227b96b37ade4225dfd026db7104d01bdb070dbefb24302",
     "goldway/provider_dialogue.py": "d5f0f300e2f2e4c525caa120f457b61d447f18ff5314cd950310326487828f51",
-    "goldway/public_chain_execution.py": "b20b870b8f32586717f7934edd5aeeb9cbd849093304bb5b316856691bc49360",
+    "goldway/public_chain_execution.py": "a02b7a1c67146fa911dd25e54a518151b748ca24d21939811621f041458262ea",
     "goldway/publication_gap_command.py": "8e42b32b79e678f16866c7031274a5d75e1453adbdd5173d194c8a9f8a3769fc",
     "goldway/purchase_quote_command.py": "08b14ff9b9366b9f3708483b6c5a8b316070c87454073569911f5b6b1bc1e243",
     "goldway/purchase_stock_preview_command.py": "5570a88978b2e06cd9387d99b935c63c07d5471cea5c601c712a768e040d2c11",

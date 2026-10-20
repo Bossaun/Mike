@@ -76,7 +76,7 @@ def pipe(c,data,result=0):
 def test_disabled_no_io_or_config_access(c):
  c.mp.setattr(m,'_profile',lambda *a:pytest.fail('disabled profile gate'));c.mp.setattr(m,'_consume',lambda:pytest.fail('disabled marker IO'))
  assert m.maybe_start(object()) is False and not c.outputs and not Thread.made and not c.callbacks
-@pytest.mark.parametrize('value',['','20261020','20261020-a ','20261020-A','root-approved-once','20261020-b'])
+@pytest.mark.parametrize('value',['','20261020','20261020-b ','20261020-B','root-approved-once','20261020-a'])
 def test_wrong_nonce_no_io(c,value):
  c.mp.setenv('GOLDWAY_PUBLIC_CHAIN_RUN',value);c.mp.setattr(m,'_consume',lambda:pytest.fail('wrong nonce IO'))
  assert not m.maybe_start(c.config) and not c.outputs and not Thread.made
@@ -189,6 +189,6 @@ def test_atexit_cleanup_kills_and_prevents_new_launch(c):
 def test_actual_logger_wrapper_and_failure(c,capsys):
  spec=importlib.util.spec_from_file_location('fresh_public_chain',Path(m.__file__));fresh=importlib.util.module_from_spec(spec);spec.loader.exec_module(fresh)
  payload=dict(status='preflight_stopped_not_accepted',provider_calls=0);assert fresh._emit(payload)
- assert json.loads(capsys.readouterr().out)==dict(schema='goldway_public_chain_probe_v1',run='20261020-a',payload=payload)
+ assert json.loads(capsys.readouterr().out)==dict(schema='goldway_public_chain_probe_v1',run=m.RUN,payload=payload)
  def fail(*a,**kw):raise OSError('PRIVATE')
  c.mp.setattr('builtins.print',fail);assert fresh._emit(payload) is False
