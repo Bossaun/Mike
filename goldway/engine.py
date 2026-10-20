@@ -23,16 +23,19 @@ def fingerprint(text):
     return hashlib.sha256(' '.join(text.casefold().split()).encode()).hexdigest()
 
 class Engine:
-    def __init__(self, store, config, model, now=time.time, *, trusted_registry=None, trusted_sources=()):
+    def __init__(self, store, config, model, now=time.time, *, trusted_registry=None, trusted_sources=(), google_credentials=None):
         from .intelligence import trusted_injection
         trusted_injection(config,trusted_registry,trusted_sources)
         self.s, self.c, self.model, self.now = store, config, model, now
         self.b = config['business']
         from .intelligence import Intelligence, intelligence_enabled
+        if google_credentials is not None and not intelligence_enabled(config):
+            raise ValueError('knowledge_credentials_invalid')
+        credential_options={'google_credentials':google_credentials} if google_credentials is not None else {}
         if trusted_registry is None:
-            self.intelligence = Intelligence(store, config) if intelligence_enabled(config) else None
+            self.intelligence = Intelligence(store, config,**credential_options) if intelligence_enabled(config) else None
         else:
-            self.intelligence = Intelligence(store,config,trusted_registry=trusted_registry,trusted_sources=trusted_sources)
+            self.intelligence = Intelligence(store,config,trusted_registry=trusted_registry,trusted_sources=trusted_sources,**credential_options)
         self.tz = ZoneInfo(config.get('timezone','Europe/Moscow'))
         with nullcontext() if store.db.in_transaction else store.transaction():
             start_observing(store, self.b, at=self.now(), timezone_name=self.tz.key)

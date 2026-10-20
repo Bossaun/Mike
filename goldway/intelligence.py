@@ -61,8 +61,15 @@ def _owned_trusted_sources(store,business):
 
 
 class Intelligence:
-    def __init__(self, store, config, *, trusted_registry=None, trusted_sources=()):
+    def __init__(self, store, config, *, trusted_registry=None, trusted_sources=(), google_credentials=None):
         trusted_ids=trusted_injection(config,trusted_registry,trusted_sources)
+        if google_credentials is not None:
+            scopes=set(getattr(google_credentials,'scopes',()) or ())
+            if (not intelligence_enabled(config)
+                    or scopes != {'https://www.googleapis.com/auth/drive.readonly'}
+                    or not callable(getattr(google_credentials,'before_request',None))
+                    or not any(s.get('kind')=='drive' for s in config['intelligence'].get('sources',[]))):
+                raise ValueError('knowledge_credentials_invalid')
         owned_ids=_owned_trusted_sources(store,config['business'])
         self.s, self.c, self.b = store, config, config['business']
         cfg = config['intelligence']
@@ -92,6 +99,7 @@ class Intelligence:
             if row['source_id'].startswith(self.prefix): self.index.revoke_source(row['source_id'])
         # Google credentials must be injected separately; never use ambient account auth.
         self.sources = ReadOnlySources(self.index, specs, {self.reader(x) for x in members},
+                                      google_credentials=google_credentials,
                                       refresh_seconds=cfg.get('refresh_seconds', 900),
                                       trusted_registry=trusted_registry,trusted_sources=trusted_sources,business=self.b)
         store.execute('''CREATE TABLE IF NOT EXISTS intelligence_outbox_acl(

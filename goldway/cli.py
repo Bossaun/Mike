@@ -56,6 +56,26 @@ def make_model(s,c,fixture=None):
     if not key: raise ValueError('MODEL_API_KEY missing; use --fixture only for explicit offline tests')
     return JsonModel(s,c['business'],c['model'],key)
 
+
+def make_knowledge_credentials(config):
+    """Only a separately provisioned read-only account for registered Drive files.
+
+    Never reuse Sheets write credentials, ambient Google auth or discover files.
+    No credential file is opened unless Drive knowledge is explicitly configured.
+    """
+    cfg=config.get('intelligence')
+    if (not isinstance(cfg,dict) or cfg.get('enabled') is not True
+            or not any(s.get('kind')=='drive' for s in cfg.get('sources',[]))):
+        return None
+    filename=os.environ.get('GOOGLE_KNOWLEDGE_SERVICE_ACCOUNT_FILE')
+    if not filename:return None
+    try:
+        from google.oauth2.service_account import Credentials
+        return Credentials.from_service_account_file(filename,
+            scopes=['https://www.googleapis.com/auth/drive.readonly'])
+    except Exception:
+        raise ValueError('knowledge_credentials_unavailable') from None
+
 def pending(e, updates=None, should_stop=lambda:False):
     for ev in e.s.rows("SELECT id,kind,payload FROM events WHERE business=? AND state='pending' LIMIT 20",(e.b,)):
         if should_stop():break
@@ -221,7 +241,9 @@ def main():
     if args.command=='retry-event':
         s.execute("UPDATE events SET state='pending',error=NULL WHERE business=? AND id=? AND state='failed'",(c['business'],args.id)); return
     model=make_model(s,c,getattr(args,'fixture',None)) if args.command in ('ingest','run') else None
-    e=Engine(s,c,model)
+    knowledge_credentials=make_knowledge_credentials(c) if args.command in ('ingest','run') else None
+    e=(Engine(s,c,model,google_credentials=knowledge_credentials) if knowledge_credentials is not None
+       else Engine(s,c,model))
     if args.command=='import-tasks':
         from .importer import import_tasks
         print(json.dumps(import_tasks(e,json.loads(Path(args.file).read_text()),args.source,args.apply),ensure_ascii=False,indent=2))
