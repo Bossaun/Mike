@@ -170,6 +170,9 @@ def run(e, run_seconds=None):
     last_sheet=0
     counters={'poll_batches':0,'received_updates':0,'poll_errors':0,'completed_cycles':0}
     runtime_health(e,bot,counters)
+    # Default inert; one bounded public/synthetic probe, no second poller.
+    from .public_chain_execution import maybe_start
+    maybe_start(e.c)
     last_health=time.monotonic()
     deadline=time.monotonic()+run_seconds if run_seconds is not None else None
     while not stop and (deadline is None or time.monotonic()<deadline):
