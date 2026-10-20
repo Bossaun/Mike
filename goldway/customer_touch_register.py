@@ -119,6 +119,17 @@ class RegistrationReceipt:
     live_authorized:bool=field(default=False,init=False)
 
 
+@dataclass(frozen=True)
+class TouchReviewSnapshot:
+    evaluation:TouchEvaluation
+    local_revision:int
+    digest:str
+    scope_fingerprint:str
+    conversation:core.Conversation
+    requires_review:bool=field(default=True,init=False)
+    live_authorized:bool=field(default=False,init=False)
+
+
 class _Reader:
     def __init__(self,store):self.store=store;self.queries=0;self.rows=0;self.bytes=0
     def read(self,key):
@@ -202,6 +213,90 @@ class CustomerTouchRegister:
         if set(current)!={row.event_id for rows in records.values() for row in rows} or any(current.get(key)!=value for key,value in anchors.items()):_deny()
         self._scope();return evaluation,current
 
+    def _save(self,reader,key,raw,state,proof,now,fingerprint,anchors,additions):
+        """The one canonical register CAS phase, shared by single and batch writes.
+
+        It never owns/commits the caller transaction. Statement-level failures
+        are rolled back by the owning public method; fatal DB faults retain the
+        existing Store transaction failure semantics.
+        """
+        updated=dict(state,revision=state['revision']+1,last_write_at=now.isoformat(),anchors=anchors)
+        for keyname,entries in additions.items():updated[keyname]=list(state[keyname])+entries
+        if not 1<=updated['revision']<2**53:_deny()
+        encoded=_json(updated)
+        if len(encoded.encode())>MAX_STATE_BYTES:_deny()
+        if raw is None:count=self._store.execute('INSERT INTO runtime(key,value) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM runtime WHERE key=?)',(key,encoded,key)).rowcount
+        else:count=self._store.execute('UPDATE runtime SET value=? WHERE key=? AND value=?',(encoded,key,raw)).rowcount
+        if count!=1 or self._proof(now,fingerprint)!=proof or reader.read(key)!=encoded:_deny()
+        self._scope();return updated,encoded
+
+    def _review(self,reader,now,reporting_window):
+        scope,key,fingerprint,conversation=self._scope()
+        proof=self._proof(now,fingerprint);raw=reader.read(key);state,records=self._decode(raw,scope,fingerprint,conversation)
+        if state['last_write_at'] is not None and now<_date(state['last_write_at']):_deny()
+        evaluation,anchors=self._evaluate(records,now,proof,state['anchors'],reporting_window)
+        if self._proof(now,fingerprint)!=proof or reader.read(key)!=raw:_deny()
+        self._scope()
+        digest=_hash(['touch-review:v1',scope,raw,_proof_data(proof),None if reporting_window is None else _window(reporting_window)])
+        snapshot=TouchReviewSnapshot(evaluation,state['revision'],digest,scope,self._conversation)
+        return snapshot,(key,raw,state,records,proof,fingerprint,anchors)
+
+    def review_snapshot(self,*,now,reporting_window,expected_store):
+        """Current metadata-only exact-Store view; no cursor/account/body export."""
+        if not self._enabled or expected_store is not self._store:_deny()
+        try:
+            self._scope();now=_utc(now);_window(reporting_window)
+            return self._review(_Reader(self._store),now,reporting_window)[0]
+        except TouchRegisterUnavailable:raise
+        except Exception:raise TouchRegisterUnavailable() from None
+
+    def record_self_reported_receipts_in_transaction(self,receipts,*,now,reporting_window,expected_store,expected_snapshot_digest):
+        """Checked uncertain receipts in an already-owned exact-Store transaction.
+
+        The entire 0..8 batch is validated through the actual evaluator before
+        one canonical CAS. A savepoint protects callers that catch an ordinary
+        statement failure; it neither commits nor masks transaction-fatal faults.
+        """
+        if not self._enabled or expected_store is not self._store:_deny()
+        try:
+            self._scope()
+            if not self._store.db.in_transaction or type(receipts) is not tuple or len(receipts)>8:_deny()
+            now=_utc(now);_window(reporting_window)
+            if type(expected_snapshot_digest) is not str or re.fullmatch('[0-9a-f]{64}',expected_snapshot_digest) is None:_deny()
+            data=[]
+            for row in receipts:
+                item=_data(row,self._conversation,'receipt')
+                if row.confirmed is not False:_deny()
+                data.append(item)
+            if any(len({getattr(row,key) for row in receipts})!=len(receipts) for key in ('id','plan_id','event_id')):_deny()
+            reader=_Reader(self._store)
+            snapshot,parts=self._review(reader,now,reporting_window)
+            if snapshot.digest!=expected_snapshot_digest:_deny()
+            key,raw,state,records,proof,fingerprint,anchors=parts
+            if not receipts:return snapshot
+            eligible={c.target_id for c in snapshot.evaluation.preview.candidates}
+            allids={row.id for rows in records.values() for row in rows}
+            if any(row.id in allids or row.plan_id not in eligible for row in receipts) or len(records['receipt'])+len(receipts)>16:_deny()
+            proposed=dict(records,receipt=records['receipt']+receipts)
+            evaluation,anchors=self._evaluate(proposed,now,proof,state['anchors'],reporting_window)
+            if any(row.plan_id not in evaluation.summary.uncertain_ids for row in receipts):_deny()
+            if self._proof(now,fingerprint)!=proof or reader.read(key)!=raw:_deny()
+            owned_db=self._store.db
+            self._store.execute('SAVEPOINT touch_self_report_batch')
+            try:
+                updated,encoded=self._save(reader,key,raw,state,proof,now,fingerprint,anchors,
+                    {'receipts':[dict(payload=item,registered_at=now.isoformat(),source_proof=_proof_data(proof)) for item in data]})
+                digest=_hash(['touch-review:v1',snapshot.scope_fingerprint,encoded,_proof_data(proof),_window(reporting_window)])
+                result=TouchReviewSnapshot(evaluation,updated['revision'],digest,snapshot.scope_fingerprint,self._conversation)
+                self._store.execute('RELEASE touch_self_report_batch')
+                return result
+            except BaseException:
+                if owned_db.in_transaction:
+                    owned_db.execute('ROLLBACK TO touch_self_report_batch');owned_db.execute('RELEASE touch_self_report_batch')
+                raise
+        except TouchRegisterUnavailable:raise
+        except Exception:raise TouchRegisterUnavailable() from None
+
     def _record(self,record,now,kind):
         if not self._enabled:_deny()
         try:
@@ -221,15 +316,8 @@ class CustomerTouchRegister:
                 proposed=dict(records);proposed[kind]+= (record,)
                 evaluation,anchors=self._evaluate(proposed,now,proof,state['anchors'])
                 if self._proof(now,fingerprint)!=proof:_deny()
-                updated=dict(state,revision=state['revision']+1,last_write_at=now.isoformat(),anchors=anchors)
-                updated[keyname]=list(state[keyname])+[dict(payload=data,registered_at=now.isoformat(),source_proof=_proof_data(proof))]
-                if not 1<=updated['revision']<2**53:_deny()
-                encoded=_json(updated)
-                if len(encoded.encode())>MAX_STATE_BYTES:_deny()
-                if raw is None:count=self._store.execute('INSERT INTO runtime(key,value) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM runtime WHERE key=?)',(key,encoded,key)).rowcount
-                else:count=self._store.execute('UPDATE runtime SET value=? WHERE key=? AND value=?',(encoded,key,raw)).rowcount
-                if count!=1 or self._proof(now,fingerprint)!=proof or reader.read(key)!=encoded:_deny()
-                self._scope()
+                updated,encoded=self._save(reader,key,raw,state,proof,now,fingerprint,anchors,
+                    {keyname:[dict(payload=data,registered_at=now.isoformat(),source_proof=_proof_data(proof))]})
             return RegistrationReceipt(record.id,kind,now,updated['revision'],False)
         except TouchRegisterUnavailable:raise
         except Exception:raise TouchRegisterUnavailable() from None
@@ -243,11 +331,6 @@ class CustomerTouchRegister:
         try:
             now=_utc(now)
             if reporting_window is not None:_window(reporting_window)
-            scope,key,fingerprint,conversation=self._scope();reader=_Reader(self._store)
-            proof=self._proof(now,fingerprint);raw=reader.read(key);state,records=self._decode(raw,scope,fingerprint,conversation)
-            if state['last_write_at'] is not None and now<_date(state['last_write_at']):_deny()
-            evaluation,anchors=self._evaluate(records,now,proof,state['anchors'],reporting_window)
-            if self._proof(now,fingerprint)!=proof or reader.read(key)!=raw:_deny()
-            self._scope();return evaluation
+            return self._review(_Reader(self._store),now,reporting_window)[0].evaluation
         except TouchRegisterUnavailable:raise
         except Exception:raise TouchRegisterUnavailable() from None
