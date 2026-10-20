@@ -1,7 +1,7 @@
 {
   "format": "provider-chain-source-freeze-v1",
-  "base_sha": "4160140f52927e77052d6cd4ebe278799d48306a",
-  "reason": "Confirmed actual turn2 incomplete explanation and turn1 unsupported origin; reviewed prompt fix, distinct root-approved once attempt b, no automatic retry",
+  "base_sha": "3d19b07f14bfdc96bb66df3f3754664fca3a386e",
+  "reason": "Confirmed actual B ordinary catalogue question replaced by meeting-question failure; isolated source sidecar fix and distinct once-c, no automatic retry",
   "files": {
     "goldway/__init__.py": "fb18427c4d5b188dadf2ed4822721a50fe97bda0ff770faa01f1149cc7d55b9d",
     "goldway/agenda_command.py": "92dac389a6e2455113e760863c035a555e7359b65ad7a9369dc42d71333474b4",
@@ -57,7 +57,7 @@
     "goldway/manager_summary.py": "fad94fe1163ab29b01312d52ae90ccd882eecf96ab9cb054dac56adc5e13fb04",
     "goldway/marketing_drafts.py": "fc9f7851ad7264522d1dc81aa51638dcc6ece2942addc1489442b21231e73a89",
     "goldway/meeting_binding.py": "2446204303d7fae303e3bb154e6be019f605f42a5634f00d45c2769219959ed8",
-    "goldway/meeting_questions.py": "896f35b21443c2797388b27c2c7074695250ef9b74900e39c0b93bff9cec3417",
+    "goldway/meeting_questions.py": "d2db4528175e7c5cc40060d8bc11808f29b09fbf663e91d4b6536229910cfcd5",
     "goldway/meeting_review.py": "9b56bee805314083be90a5414335f0530b31119163d5be1ada813ac9778c56db",
     "goldway/meeting_review_render.py": "4ff04a822b46125f4e7ca0550efee9d2cc7727fb1463af478a70ce257614a2df",
     "goldway/meeting_week_adapter.py": "fadb3b126d8d27d2e466d3bf8f9a7b31560cdbfe1a9170f72161e8622a988e4d",
@@ -83,7 +83,7 @@
     "goldway/promotion_explanation_review.py": "f4ba2ead5f455dfc16b1ac62b2b19c669a2b37dc28b3d5e5ed544be047fb5e32",
     "goldway/promotion_preview_command.py": "45e3ba1706a091c74227b96b37ade4225dfd026db7104d01bdb070dbefb24302",
     "goldway/provider_dialogue.py": "d5f0f300e2f2e4c525caa120f457b61d447f18ff5314cd950310326487828f51",
-    "goldway/public_chain_execution.py": "a02b7a1c67146fa911dd25e54a518151b748ca24d21939811621f041458262ea",
+    "goldway/public_chain_execution.py": "c1e5de5c23fa916dea080617f2aaac8b2fbc7b2120c0f0adb37b571f6180b1f1",
     "goldway/publication_gap_command.py": "8e42b32b79e678f16866c7031274a5d75e1453adbdd5173d194c8a9f8a3769fc",
     "goldway/purchase_quote_command.py": "08b14ff9b9366b9f3708483b6c5a8b316070c87454073569911f5b6b1bc1e243",
     "goldway/purchase_stock_preview_command.py": "5570a88978b2e06cd9387d99b935c63c07d5471cea5c601c712a768e040d2c11",

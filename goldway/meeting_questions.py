@@ -5,6 +5,7 @@ this is not the caller-reviewed MeetingReview contract or a knowledge import.
 """
 from dataclasses import dataclass
 from html import escape
+import re
 from .answer_citations import _hash, _permissions
 from .task_card_reference import _gate, _barrier
 from .mutation_target import _policy
@@ -72,12 +73,45 @@ class QuestionDraft:
     pages:tuple[str,...]
 
 
+_MEETING_HEADING=re.compile(
+    r'^\s*(?:(?:текст|запись|стенограмма|протокол|заметки|итоги)\s+'
+    r'(?:план[её]рки|встречи|совещания|обсуждения)|'
+    r'план[её]рка|совещание|встреча|обсуждение|итоги)(?=\s*[:.\n]|\s*$)',re.I)
+_MEETING_REQUEST=re.compile(
+    r'^\s*(?:разбери|разберите|разбор)\s+(?:текст\s+)?'
+    r'(?:план[её]рк[иу]|совещани[ея]|встреч[иу]|обсуждени[ея])(?=\s*[:.\n]|\s*$)',re.I)
+_QUESTION_REQUEST=re.compile(
+    r'^\s*(?:пожалуйста[, ]+)?(?:что|кто|как|какой|какая|какие|где|когда|почему|зачем|сколько|'
+    r'можно|можешь|расскажи|расскажите|объясни|объясните|поясни|поясните|перечисли|перечислите|'
+    r'напиши|напишите|составь|составьте|подготовь|подготовьте|покажи|покажите|сравни|сравните|вопрос)\b',re.I)
+_SPEAKER=re.compile(r'(?:^|[\n;])\s*([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9 ._-]{0,47}):\s*\S')
+_FIELDS=frozenset(('источник','документ','запрос','вопрос','ответ','цена','валюта','бренд','бренды','каталог','позиции',
+    'source','document','query','question','answer'))
+
+
+def _meeting_intake(text):
+    """Literal intake shape only, never a semantic decision or speaker identity.
+
+    Ordinary question/draft framing cannot advertise a meeting-only extension.
+    Explicit headings include one-line notes; two distinct source speaker labels
+    need no heading and may contain questions. Unrecognized meeting text still
+    uses the existing model/legacy meeting path without this optional sidecar.
+    """
+    if type(text) is not str or len(text)>32000:return True
+    if _MEETING_HEADING.match(text) or _MEETING_REQUEST.match(text):return True
+    if _QUESTION_REQUEST.match(text):return False
+    labels={m.group(1).strip().casefold() for m in _SPEAKER.finditer(text)}-_FIELDS
+    return len(labels)>=2
+
+
 def capture(engine,event_id,payload,context):
     """Advertise only this captured private host capability, before model call."""
     context.setdefault('capabilities',{})['meeting_question_draft']=False
+    context.pop('meeting_question_line_count',None)
     if (context.get('kind')!='operator_chat' or context.get('sender_role')!='admin'
         or context.get('can_create_tasks') is not True or context.get('work_context')
         or any(context.get(k) for k in ('rewrite_only','ordinal_only','comparison_only'))):return None
+    if not _meeting_intake(payload.get('text')):return None
     try:
         text=payload['text'];lines=text.splitlines()
         if type(text) is not str or not 0<len(text)<=32000 or not 1<=len(lines)<=1000:_fail()
@@ -109,6 +143,14 @@ def recheck(engine,payload,context,host):
 def validate(engine,payload,context,result,host):
     """Missing/empty field is legacy-compatible; no projection or new authority."""
     if 'meeting_question_lines' not in result:return None
+    # A non-meeting conversation cannot gain sidecar authority from an
+    # unadvertised provider extension. Existing Engine/Intelligence checks have
+    # already validated conversation/actions/citations; do not replace that
+    # answer with a meeting-only failure notice. Actual meeting inputs/intents,
+    # nonempty actions and advertised capabilities retain strict validation.
+    if (host is None and context.get('capabilities',{}).get('meeting_question_draft') is not True
+        and not _meeting_intake(payload.get('text')) and result.get('intent')=='conversation'
+        and type(result.get('actions')) is list and result['actions']==[]):return None
     spans=result['meeting_question_lines']
     if type(spans) is not list or len(spans)>MAX_QUESTIONS:_fail()
     if not spans:return None
