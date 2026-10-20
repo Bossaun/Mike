@@ -2,6 +2,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -15,6 +16,38 @@ from .sheets import Sheets
 from .errors import event_error, event_log_error
 
 ALLOWED_UPDATES=['my_chat_member','message','edited_message','business_connection','business_message','edited_business_message','deleted_business_messages']
+
+
+def runtime_health(e, bot, counters):
+    """Fixed aggregate log only; never payloads, recipients, IDs or credentials.
+
+    Counts describe current stored states, not newly delivered messages or a
+    human result. Logging failure must not interrupt the existing worker.
+    """
+    try:
+        username = bot.get('username')
+        if type(username) is not str or re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}', username) is None:
+            username = None
+        report = {'schema': 'goldway_runtime_health_v1', 'bot_username': username,
+                  'team_gate': 'team_intake' in e.c,
+                  'poll_batches': counters['poll_batches'],
+                  'received_updates': counters['received_updates'],
+                  'poll_errors': counters['poll_errors'],
+                  'completed_cycles': counters['completed_cycles']}
+        for table, states in (('events', ('pending','done','failed','superseded')),
+                              ('outbox', ('pending','retry','blocked','sending','sent','unknown'))):
+            slots = ','.join('?' for _ in states)
+            rows = e.s.execute(f'SELECT state,COUNT(*) AS n FROM {table} WHERE business=? AND state IN ({slots}) GROUP BY state',
+                               (e.b, *states)).fetchall()
+            report[table] = {state: 0 for state in states}
+            report[table].update({row['state']: row['n'] for row in rows})
+        print(json.dumps(report, sort_keys=True), flush=True)
+    except Exception:
+        # Constant code: exception messages may include private data.
+        try:
+            print('{"schema":"goldway_runtime_health_v1","unavailable":true}', flush=True)
+        except Exception:
+            pass
 
 def make_model(s,c,fixture=None):
     if fixture:
@@ -109,11 +142,16 @@ def run(e, run_seconds=None):
         stop=True
     signal.signal(signal.SIGTERM,shutdown); signal.signal(signal.SIGINT,shutdown)
     last_sheet=0
+    counters={'poll_batches':0,'received_updates':0,'poll_errors':0,'completed_cycles':0}
+    runtime_health(e,bot,counters)
+    last_health=time.monotonic()
     deadline=time.monotonic()+run_seconds if run_seconds is not None else None
     while not stop and (deadline is None or time.monotonic()<deadline):
         offset=e.s.execute('SELECT value FROM runtime WHERE key=?',(e.b+':offset',)).fetchone()
         try:
             batch=api.call('getUpdates',offset=int(offset[0]) if offset else 0,timeout=min(25,max(0,int(deadline-time.monotonic()))) if deadline is not None else 25,allowed_updates=ALLOWED_UPDATES)
+            counters['poll_batches']+=1
+            counters['received_updates']+=len(batch)
             for u in batch:
                 # Processing update + persisted offset is atomic. Events can be handled after commit.
                 try:
@@ -125,6 +163,7 @@ def run(e, run_seconds=None):
                 with e.s.transaction():
                     e.s.execute('INSERT INTO runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(e.b+':offset',str(u['update_id']+1)))
         except Exception as exc:
+            counters['poll_errors']+=1
             print('Telegram polling:',type(exc).__name__,file=sys.stderr)
             time.sleep(5)
         if stop:break
@@ -137,6 +176,10 @@ def run(e, run_seconds=None):
         dispatch.flush(lambda:stop)
         if stop:break
         e.s.execute('INSERT INTO runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(e.b+':heartbeat',str(time.time())))
+        counters['completed_cycles']+=1
+        if time.monotonic()-last_health>=300:
+            runtime_health(e,bot,counters)
+            last_health=time.monotonic()
         if sheets and time.time()-last_sheet>=e.c.get('sheet_sync_seconds',120):
             try: sheets.sync()
             except Exception as exc:
