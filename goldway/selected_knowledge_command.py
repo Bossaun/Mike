@@ -267,7 +267,9 @@ def _load(reader,business,identifier):
 
 
 def cancel(store,business,identifier):
-    store.execute("UPDATE outbox SET state='cancelled',error=? WHERE business=? AND id=? AND dedupe LIKE 'selected-knowledge-preview:%' AND state IN ('pending','retry','blocked')",(CANCEL,business,identifier))
+    from .knowledge_selection_catalog import cancel as cancel_catalog
+    cancel_catalog(store,business,identifier)
+    store.execute("UPDATE outbox SET state='cancelled',error=? WHERE business=? AND id=? AND dedupe LIKE 'selected-knowledge-preview:%' AND dedupe NOT LIKE 'selected-knowledge-preview:catalog:%' AND state IN ('pending','retry','blocked')",(CANCEL,business,identifier))
 
 
 def _bindings(documents):return [[doc.source_id,doc.document_id,doc.document_key] for doc in documents]
@@ -337,8 +339,11 @@ def _chat(reader,business,request,parts,now):
 
 
 def make_delivery_guard(engine):
+    from .knowledge_selection_catalog import make_delivery_guard as make_catalog_guard, PREFIX as CATALOG_PREFIX
+    catalog_guard=make_catalog_guard(engine)
     host=_Host(engine);store,db,config,business,intel,index=host.saved[:6]
     def guard(row,route=None,transport=None):
+        if row['dedupe'].startswith(CATALOG_PREFIX):return catalog_guard(row,route,transport)
         if not row['dedupe'].startswith(PREFIX):return False
         try:
             host.bound()

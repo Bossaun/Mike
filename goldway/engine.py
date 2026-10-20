@@ -161,6 +161,10 @@ class Engine:
                 if added:handle_source_followup(self,event_id,payload)
                 return added
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
+            from .knowledge_selection_catalog import is_command as is_catalog, handle as handle_catalog
+            if is_catalog(text):
+                if added:handle_catalog(self,event_id,payload)
+                return added
             from .selected_knowledge_command import is_command as is_selected_knowledge, handle as handle_selected_knowledge
             if is_selected_knowledge(text):
                 if added:handle_selected_knowledge(self,event_id,payload)
