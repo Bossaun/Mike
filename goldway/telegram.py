@@ -48,13 +48,15 @@ class Telegram:
             raise RuntimeError('Telegram document download failed') from None
 
 class Dispatcher:
-    def __init__(self, store, config, telegram, now=time.time, weekly_guard=None, personal_list_guard=None, own_impediments_guard=None, task_brief_guard=None):
+    def __init__(self, store, config, telegram, now=time.time, weekly_guard=None, personal_list_guard=None, own_impediments_guard=None, task_brief_guard=None, selected_knowledge_guard=None):
         self.s,self.c,self.api,self.now=store,config,telegram,now
         self.b=config['business']
         self.weekly_guard=weekly_guard
         self.personal_list_guard=personal_list_guard
         self.own_impediments_guard=own_impediments_guard
         self.task_brief_guard=task_brief_guard
+        self.selected_knowledge_guard=selected_knowledge_guard
+        self._selected_knowledge_store,self._selected_knowledge_db=store,store.db
 
     def _weekly_permitted(self, row, route=None, transport=None):
         if not row['dedupe'].startswith('weekly-review:'):return True
@@ -90,6 +92,16 @@ class Dispatcher:
             if self.task_brief_guard is not None and self.task_brief_guard(row,route,transport) is True:return True
         except Exception:pass
         cancel_task_brief(self.s,self.b,row['id'])
+        return False
+
+    def _selected_knowledge_permitted(self, row, route=None, transport=None):
+        if not row['dedupe'].startswith('selected-knowledge-preview:'):return True
+        if self.s is not self._selected_knowledge_store or self.s.db is not self._selected_knowledge_db:return False
+        from .selected_knowledge_command import cancel
+        try:
+            if self.selected_knowledge_guard is not None and self.selected_knowledge_guard(row,route,transport) is True:return True
+        except Exception:pass
+        if self.s is self._selected_knowledge_store and self.s.db is self._selected_knowledge_db:cancel(self.s,self.b,row['id'])
         return False
 
     def recover(self):
@@ -140,11 +152,15 @@ class Dispatcher:
                 if not self._personal_list_permitted(row):continue
                 if not self._own_impediments_permitted(row):continue
                 if not self._task_brief_permitted(row):continue
+                if not self._selected_knowledge_permitted(row):continue
                 if row['dedupe'].startswith('deadline-policy:'):
                     from .deadline_policy import permit_delivery
                     if not permit_delivery(self.s,self.c,row,self.now()):continue
                 from .intelligence import delivery_permitted
                 if not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
+                    if row['dedupe'].startswith('selected-knowledge-preview:'):
+                        from .selected_knowledge_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
                     if row['dedupe'].startswith('task-design-brief:'):
                         from .design_brief_command import cancel_task_brief
                         cancel_task_brief(self.s,self.b,row['id']);continue
@@ -161,6 +177,9 @@ class Dispatcher:
                 try:
                     route,transport=self.route(row['recipient'],row['preferred_transport'])
                 except DeliveryError:
+                    if row['dedupe'].startswith('selected-knowledge-preview:'):
+                        from .selected_knowledge_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
                     if row['dedupe'].startswith('task-design-brief:'):
                         from .design_brief_command import cancel_task_brief
                         cancel_task_brief(self.s,self.b,row['id']);continue
@@ -179,6 +198,7 @@ class Dispatcher:
                     if not self._personal_list_permitted(row,route,transport):continue
                     if not self._own_impediments_permitted(row,route,transport):continue
                     if not self._task_brief_permitted(row,route,transport):continue
+                    if not self._selected_knowledge_permitted(row,route,transport):continue
                     if row['dedupe'].startswith('deadline-policy:') and not permit_delivery(self.s,self.c,row,self.now()):continue
                     # A policy guard may rebuild the body after route looked up rights.
                     if row['dedupe'].startswith('deadline-policy:'):
@@ -197,6 +217,9 @@ class Dispatcher:
                     if row['dedupe'].startswith('task-design-brief:') and not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
                         from .design_brief_command import cancel_task_brief
                         cancel_task_brief(self.s,self.b,row['id']);continue
+                    if row['dedupe'].startswith('selected-knowledge-preview:') and not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
+                        from .selected_knowledge_command import cancel
+                        cancel(self.s,self.b,row['id']);continue
                     claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
                 if not claimed: continue
                 params=dict(route,text=row['text'])

@@ -96,6 +96,17 @@ class SourceRequest:
     known_version: int | None
 
 
+@dataclass(frozen=True)
+class SourceMetadata:
+    """Current cached permission/version metadata, without documents or I/O."""
+    business: str
+    spec: SourceSpec
+    version: int
+    observed_at: int | float
+    expires_at: int | float
+    fingerprint: str
+
+
 @dataclass
 class _Provider:
     callback: Callable = field(repr=False)
@@ -138,6 +149,32 @@ class TrustedProviders:
             raise ProviderError('clock_rollback')
         self._last_now = now
         return now
+
+    def source_metadata(self, source_id: str, *, reader: str, now: int | float) -> SourceMetadata:
+        """Read only; explicit time never invokes the registry clock/provider."""
+        source = self._source(source_id)
+        _reader(reader)
+        now = _time(now)
+        spec = source.spec
+        if type(spec) is not SourceSpec or source.revoked is not False:
+            raise ProviderError('invalid_source_policy')
+        spec.__post_init__()
+        if spec.source_id != source_id or reader not in spec.audience or reader not in self._members:
+            raise ProviderError('wrong_audience')
+        snapshot = source.snapshot
+        if type(snapshot) is not ProviderSnapshot:
+            raise ProviderError('snapshot_unavailable')
+        _version(snapshot.version)
+        observed = _time(snapshot.observed_at)
+        expires = observed + spec.ttl_seconds
+        if (snapshot.provider_id != spec.provider_id or snapshot.source_id != spec.source_id
+                or snapshot.version < spec.minimum_version or source.known_version != snapshot.version
+                or source.observed_at != observed or type(source.fingerprint) is not str
+                or re.fullmatch('[0-9a-f]{64}', source.fingerprint) is None):
+            raise ProviderError('snapshot_source_mismatch')
+        if not observed <= now < expires or not observed < expires:
+            raise ProviderError('stale_or_future_snapshot')
+        return SourceMetadata(self.business, spec, snapshot.version, observed, expires, source.fingerprint)
 
     def register_provider(self, provider_id: str, callback: Callable, *, credential: object):
         _label(provider_id)

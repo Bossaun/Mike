@@ -161,6 +161,10 @@ class Engine:
                 if added:handle_source_followup(self,event_id,payload)
                 return added
             if added and self.c.get('business')==self.b and self._closed_team():begin_answer(self.s,self.c,event_id,payload,self.now())
+            from .selected_knowledge_command import is_command as is_selected_knowledge, handle as handle_selected_knowledge
+            if is_selected_knowledge(text):
+                if added:handle_selected_knowledge(self,event_id,payload)
+                return added
             from .weekly_review_command import is_weekly_review_command, handle as handle_weekly_review
             if is_weekly_review_command(text):
                 if added:handle_weekly_review(self,event_id,payload)
