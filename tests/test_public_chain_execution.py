@@ -76,7 +76,7 @@ def pipe(c,data,result=0):
 def test_disabled_no_io_or_config_access(c):
  c.mp.setattr(m,'_profile',lambda *a:pytest.fail('disabled profile gate'));c.mp.setattr(m,'_consume',lambda:pytest.fail('disabled marker IO'))
  assert m.maybe_start(object()) is False and not c.outputs and not Thread.made and not c.callbacks
-@pytest.mark.parametrize('value',['','20261020','20261020-c ','20261020-C','root-approved-once','20261020-a','20261020-b'])
+@pytest.mark.parametrize('value',['','20261020','20261020-d ','20261020-D','root-approved-once','20261020-a','20261020-b','20261020-c'])
 def test_wrong_nonce_no_io(c,value):
  c.mp.setenv('GOLDWAY_PUBLIC_CHAIN_RUN',value);c.mp.setattr(m,'_consume',lambda:pytest.fail('wrong nonce IO'))
  assert not m.maybe_start(c.config) and not c.outputs and not Thread.made

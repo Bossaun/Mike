@@ -376,6 +376,17 @@ class Intelligence:
             raise ValueError('User explicitly declined task creation')
         if re.match(r'^\s*напомни\b', payload['text'], re.I) and result.get('actions'):
             raise ValueError('Reminder request cannot silently change an assignment')
+        # A completed public-catalog offer can be rendered from current checked
+        # evidence; a model's second promise is not the promised explanation.
+        from .catalog_explanation import build_catalog_explanation
+        catalog_explanation = build_catalog_explanation(context, result)
+        if catalog_explanation is not None:
+            text, source_refs, ordered_names = catalog_explanation
+            refs, names = list(source_refs), list(ordered_names)
+            result = dict(result, reply_text=text, evidence_ids=refs, knowledge_mode='grounded')
+            mode = 'grounded'
+            state = dict(state, topic='Публичный каталог GOLDWAY', entities=names,
+                         pending_offer=None, task_id=None)
         result = dict(result, dialogue_state=state)
         if mode == 'not_found' and not result.get('actions'):
             # Preserve the no-invention guard, but explain the actual source
