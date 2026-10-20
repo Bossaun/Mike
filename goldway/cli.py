@@ -74,7 +74,13 @@ def make_knowledge_credentials(config):
         return Credentials.from_service_account_file(filename,
             scopes=['https://www.googleapis.com/auth/drive.readonly'])
     except Exception:
-        raise ValueError('knowledge_credentials_unavailable') from None
+        # An optional knowledge account must not stop staff/task processing.
+        # The existing reader fails closed with None and revokes stale grants.
+        try:
+            print('knowledge_credentials_unavailable: registered Drive sources remain blocked',file=sys.stderr)
+        except Exception:
+            pass
+        return None
 
 def pending(e, updates=None, should_stop=lambda:False):
     for ev in e.s.rows("SELECT id,kind,payload FROM events WHERE business=? AND state='pending' LIMIT 20",(e.b,)):

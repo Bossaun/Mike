@@ -8,6 +8,9 @@ from google.oauth2.service_account import Credentials
 
 from goldway.cli import make_knowledge_credentials
 from goldway.engine import Engine
+from goldway.knowledge import KnowledgeIndex
+from goldway.store import Store
+from goldway.intelligence import reader_key
 import goldway.cli as cli
 
 SCOPE='https://www.googleapis.com/auth/drive.readonly'
@@ -49,13 +52,20 @@ def test_absent_explicit_knowledge_file_does_not_reuse_sheets_or_ambient(env,mon
     assert make_knowledge_credentials(configured(env[2])) is None
 
 
-def test_file_failure_is_constant_and_does_not_disclose_path_or_key(env,monkeypatch):
+def test_file_failure_is_constant_and_does_not_disclose_path_or_key(env,monkeypatch,capsys):
     monkeypatch.setenv('GOOGLE_KNOWLEDGE_SERVICE_ACCOUNT_FILE','PRIVATE_PATH')
     def fail(*a,**k):raise ValueError('PRIVATE_KEY_AND_PATH')
     monkeypatch.setattr(Credentials,'from_service_account_file',fail)
-    with pytest.raises(ValueError,match='^knowledge_credentials_unavailable$') as exc:
-        make_knowledge_credentials(configured(env[2]))
-    assert exc.value.__suppress_context__ is True
+    assert make_knowledge_credentials(configured(env[2])) is None
+    assert capsys.readouterr().err == 'knowledge_credentials_unavailable: registered Drive sources remain blocked\n'
+
+
+def test_optional_credential_warning_failure_is_also_nonfatal(env,monkeypatch):
+    monkeypatch.setenv('GOOGLE_KNOWLEDGE_SERVICE_ACCOUNT_FILE','PRIVATE_PATH')
+    def fail(*a,**k):raise OSError('PRIVATE_ERROR')
+    monkeypatch.setattr(Credentials,'from_service_account_file',fail)
+    monkeypatch.setattr('builtins.print',fail)
+    assert make_knowledge_credentials(configured(env[2])) is None
 
 
 @pytest.mark.parametrize('permissions,expected_calls', [
@@ -120,3 +130,47 @@ def test_real_cli_main_passes_readonly_account_to_real_engine(env,tmp_path,monke
     assert len(seen)==1
     assert seen[0].intelligence.sources.credentials is credential
     assert seen[0].c['sheets_write'] is c['sheets_write']
+
+
+def test_bad_optional_google_file_keeps_real_cli_worker_and_public_source_available(env,tmp_path,monkeypatch,capsys):
+    c=configured(env[2]);c['live_send']=False
+    c['intelligence']['sources'].append({'id':'synthetic-public','kind':'website',
+        'url':'https://synthetic.example.invalid/info','readers':['boss']})
+    path=tmp_path/'config.json';path.write_text(json.dumps(c))
+    monkeypatch.setenv('GOOGLE_KNOWLEDGE_SERVICE_ACCOUNT_FILE','PRIVATE_PATH')
+    def fail(*a,**k):raise ValueError('PRIVATE_KEY_ERROR')
+    monkeypatch.setattr(Credentials,'from_service_account_file',fail)
+    monkeypatch.setattr(cli,'make_model',lambda *a,**k:None)
+    calls=[];seen=[]
+    def respond(request):
+        calls.append(request)
+        assert request.url.host=='synthetic.example.invalid'
+        return httpx.Response(200,text='<p>Лира — вымышленный публичный источник.</p>')
+    client=httpx.Client(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr('goldway.knowledge_sources.httpx.Client',lambda *a,**k:client)
+    dbpath=tmp_path/'state.sqlite'
+    seed=Store(str(dbpath));index=KnowledgeIndex(seed)
+    import hashlib
+    source='source:'+hashlib.sha256(c['business'].encode()).hexdigest()+':synthetic-drive'
+    index.upsert({'source_id':source,'document_id':'synthetic_document_001',
+        'title':'Synthetic cached document','url':'https://drive.google.com/file/d/synthetic_document_001/view',
+        'text':'ARCHIVED_GOOGLE_ONLY_MARKER','readers':[reader_key(c['business'],'boss')],
+        'observed_at':1791979000,'permission_expires_at':1791980000,'confirmed':True})
+    assert index.search('ARCHIVED_GOOGLE_ONLY_MARKER',reader_key(c['business'],'boss'),now=1791979200)['evidence']
+    seed.db.close()
+    def run(engine,*args):
+        seen.append(engine)
+        engine.intelligence.sources.refresh(1791979200)
+    monkeypatch.setattr(cli,'run',run)
+    monkeypatch.setattr('sys.argv',['goldway','--config',str(path),'--db',str(dbpath),'run'])
+    cli.main()
+    assert len(seen)==1 and len(calls)==1
+    intel=seen[0].intelligence
+    assert intel.sources.credentials is None
+    assert intel.sources.status[intel.prefix+'synthetic-drive']=='blocked'
+    assert intel.sources.status[intel.prefix+'synthetic-public']=='ok'
+    assert intel.index.search('Лира',intel.reader('boss'),now=1791979201)['evidence']
+    assert not intel.index.search('ARCHIVED_GOOGLE_ONLY_MARKER',intel.reader('boss'),now=1791979201)['evidence']
+    raw=capsys.readouterr()
+    assert 'knowledge_credentials_unavailable' in raw.err
+    assert 'PRIVATE' not in raw.err+raw.out

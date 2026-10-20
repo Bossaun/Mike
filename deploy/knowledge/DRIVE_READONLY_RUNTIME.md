@@ -19,7 +19,8 @@ It never uses `GOOGLE_SERVICE_ACCOUNT_FILE`, Sheets tokens or ambient Google
 credentials. With no enabled registered Drive source, the new variable is ignored
 and its file is not read. With no explicit knowledge file, existing Drive sources
 remain blocked; no implicit account discovery or authentication occurs. A bad
-file stops the run with constant code `knowledge_credentials_unavailable`.
+file emits constant code `knowledge_credentials_unavailable`; the worker keeps
+running with Drive sources blocked and other existing sources/task flows intact.
 
 The existing adapter still checks each document's current effective reader ACL,
 TTL and exact identity before indexing. Only the existing supported text/Google
