@@ -223,6 +223,9 @@ def main():
                   prepare_personal_config(raw, directory) if personal
                   else prepare_config(raw, directory))
     os.environ.pop('GOLDWAY_CONFIG_JSON', None)
+    # Explicit admin-only development report; never opens a second intake loop.
+    from .development_reporting import maybe_send
+    maybe_send(config, directory)
     os.execvp('goldway', ['goldway', '--config', str(config), '--db',
                           str(directory / ('team.sqlite' if team else
                                            'personal.sqlite' if personal else 'goldway.sqlite')), 'run'])
