@@ -458,6 +458,7 @@ class Engine:
                 if row:self.intelligence.protect_outbox(row['id'],refs)
 
     def _context(self,p,kind):
+        from .recipient_policy import context_policy
         allowed=self.tasks() if kind=='transcript' or p['sender'] in self.c['admins'] else self.tasks(p['sender'])
         if self.intelligence:allowed=self.intelligence.visible_tasks(allowed,p['sender'],self.now())
         if self._closed_team() and p['sender'] not in self.c['admins'] and not (p.get('task_id') or self.reference_ids(p['text']) or re.search(REFERENCE_PATTERN,p['text'].casefold())):
@@ -478,7 +479,8 @@ class Engine:
             detail=json.loads(row['detail'])
             if detail.get('sender')==p['sender']: summaries.append(detail.get('summary','')[:500])
             if len(summaries)==3: break
-        return {'recent_summaries':summaries,'rules':self.c.get('rules',[]),'date':datetime.fromtimestamp(self._message_time(p),self.tz).isoformat(),
+        return {'communication_policy':context_policy(self.c,p['sender']),
+                'recent_summaries':summaries,'rules':self.c.get('rules',[]),'date':datetime.fromtimestamp(self._message_time(p),self.tz).isoformat(),
                 'date_reference_known':'message_at' in p or 'received_at' in p,
                 'business':self.b,'kind':kind,'sender':p['sender'],'text':'\n'.join(f'{i} | {line}' for i,line in enumerate(p['text'].splitlines(),1)),
                 'employees':{k:v['name'] for k,v in self.c['employees'].items()},
@@ -597,6 +599,8 @@ class Engine:
                 if ambiguous and not general:
                     result.update(dialogue_state={k:v for k,v in context['dialogue'].items() if k!='turns'}, evidence_ids=[], knowledge_mode='not_needed')
                 result=intelligence.validate(result,context,p,self.now())
+            from .recipient_policy import apply_result
+            result=apply_result(self.c,p['sender'],result)
             actions=result.get('actions')
             if not isinstance(actions,list) or len(actions)>20: raise ValueError('Invalid action list')
             if not isinstance(result.get('summary',''),str): raise ValueError('Invalid summary')

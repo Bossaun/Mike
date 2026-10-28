@@ -220,7 +220,15 @@ class Dispatcher:
                     if row['dedupe'].startswith('selected-knowledge-preview:') and not delivery_permitted(self.s,self.b,row['recipient'],row['id'],self.now(),self.c):
                         from .selected_knowledge_command import cancel
                         cancel(self.s,self.b,row['id']);continue
-                    claimed=self.s.execute("UPDATE outbox SET state='sending',attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
+                    # Re-read after route/permission checks: no stale queued text or
+                    # model-generated link can bypass the current recipient policy.
+                    current=dict(self.s.execute('SELECT * FROM outbox WHERE business=? AND id=?',(self.b,row['id'])).fetchone())
+                    if current['recipient']!=row['recipient'] or current['preferred_transport']!=row['preferred_transport']:
+                        raise DeliveryError('blocked','Recipient route changed before send')
+                    row=current
+                    from .recipient_policy import outgoing_text
+                    row['text']=outgoing_text(self.c,row['recipient'],row['text'],row['parse_mode'])
+                    claimed=self.s.execute("UPDATE outbox SET state='sending',text=?,attempts=attempts+1,transport=?,destination_chat=?,destination_connection=?,destination_thread=? WHERE id=? AND state IN ('pending','retry','blocked')",(row['text'],transport,str(route['chat_id']),route.get('business_connection_id'),route.get('message_thread_id'),row['id'])).rowcount
                 if not claimed: continue
                 params=dict(route,text=row['text'])
                 if row['parse_mode']:params['parse_mode']=row['parse_mode']
