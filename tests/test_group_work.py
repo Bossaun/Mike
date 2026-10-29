@@ -58,7 +58,7 @@ def test_addressed_message_replies_once_and_notifies_manager(r,text,parent):
  assert r.e.model.calls[0]['live_group_access']['can_read_all'] is True
  assert r.e.model.calls[0]['current_messages'][0]['addressed']
  assert len(r.s.rows('SELECT * FROM outbox'))==4
- GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==3
+ GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==2
  assert len(r.s.rows('SELECT * FROM outbox'))==4
 
 @pytest.mark.parametrize('kw',[{'chat':{'id':-99,'type':'group'}},{'date':1},{'from':{'id':99,'is_bot':True}},{'forward_origin':{}},{'sender_chat':{'id':-3}}])
@@ -98,10 +98,11 @@ def test_fabricated_evidence_unknown_task_and_promises_cannot_complete(r):
 def test_deadline_from_owner_literal_and_no_early_reminder(r):
  assert not update(r,'deadline','Возможно завтра в 15:00')
  assert not update(r,'deadline','Сделаю завтра в 15:00',uid=2)
- notes=update(r,'deadline','Сделаю 30.10.2026 в 15:00');assert notes and '30.10.2026 15:00' in notes[0]
+ notes=update(r,'deadline','Сделаю 30.10.2026 в 15:00');assert notes and '30.10.2026 в 15:00' in notes[0]
  r.w.tick();assert len(r.api.sent)==1 # activation only
- r.clock[0]=task(r)['due']+1;r.w.tick();assert len(r.api.sent)==2
- r.w.tick();assert len(r.api.sent)==2
+ r.clock[0]=task(r)['due']+1;r.w.tick();assert len(r.api.sent)==1
+ assert len(r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'"))==1
+ r.w.tick();assert len(r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'"))==1
 
 def test_unagreed_date_is_not_invented(r):
  assert deadline('скоро',r.clock[0],'Europe/Moscow') is None
@@ -129,9 +130,13 @@ def test_model_failure_is_visible_not_infinite_retry(r):
  assert len(r.e.model.calls)==1 and len(r.api.sent)==1 and 'не смог' in r.api.sent[0]['text']
 
 def test_one_daily_followup_per_owner_survives_restart(r):
- r.w.tick();assert len(r.api.sent)==2
- GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==2
- r.clock[0]+=86400;GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==3
+ r.w.tick();assert len(r.api.sent)==1
+ assert len(r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'"))==1
+ GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==1
+ r.s.execute("UPDATE outbox SET state='sent',message_id='111' WHERE dedupe LIKE 'work-followup:%'")
+ r.clock[0]+=86400;GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==1
+ assert len(r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'"))==2
+
 
 def test_notice_only_actual_new_delivery_and_not_recursive(r):
  s=r.s
@@ -241,7 +246,7 @@ def test_private_yes_is_in_progress_only_for_single_task_focus(r):
 def test_daily_touch_has_separate_reply_anchor(r):
  daily=dict(r.cfg['tasks'][0],id='C08',daily=True,owner='alen',title='Повторное касание',ask='Сделайте повторное касание.')
  r.cfg['tasks'].append(daily);r.p.write_text(json.dumps(r.cfg));w=GroupWork(r.d,r.n,r.p);w.tick()
- touch=[x for x in r.api.sent if 'C08' in x['text']];assert len(touch)==1 and 'C01' not in touch[0]['text']
+ touch=[x for x in r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'") if 'Сделайте повторное касание' in x['text']];assert len(touch)==1 and 'Покажите проверку карточки' not in touch[0]['text']
 
 
 def test_daily_digest_has_real_states_and_dedupe(r):

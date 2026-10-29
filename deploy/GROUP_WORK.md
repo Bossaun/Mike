@@ -12,26 +12,31 @@ title, ask, criterion, reviewer, source, active/daily booleans. Maximum 30 tasks
 Store mode600 uid10001. Never commit configs, private IDs, transcripts or SQLite.
 
 Owner-authorized registry is reconciled on restart. Assignment/acceptance changes
-reset progress; removed definitions never dispatch. The bot cannot invent new
-assignments, alter recipients, financial data, prices or sheet cells.
+reset progress; removed definitions never dispatch. Literal direct Mike instructions
+can create durable tasks for existing configured employees. Questions, quotes,
+third-party narratives and examples cannot create assignments. New tasks are deduped
+and private-origin tasks never enter group context. No new recipients, financial
+operations, price/stock changes or sheet mutations.
 
 New mentions of the exact bot username, initial 'Валли', and replies to bot
 messages are prioritized. Ordinary fresh messages can update existing tasks from
 literal evidence. Private capture runs after existing TEAM authentication and
-requires a task ID or a reply to a confirmed work message. Private reports are
-excluded from group model context. Dates come from explicit literal calendar/time
-or today/tomorrow expressions, Moscow timezone. Ambiguous dates need clarification.
+accepts ordinary language; IDs are optional. Confirmed sent messages provide context
+and focus for short replies such as 'yes'; queued messages do not. Private reports
+and deadline text are excluded from group model context. Natural dates use the
+incoming timestamp and Moscow timezone; uncertain dates need one short clarification.
 
 Work claim -> in_progress. Owner completion -> awaiting_acceptance. Only the
 configured reviewer or Mike can explicitly accept. Inspection, promises and
 negative acceptance are not completion. No external artifact verification is
 claimed. Images/voice without text are not interpreted by this text-only path.
 
-One reminder per owner/bucket per day at the existing schedule; daily touch has
-its own reply anchor. Agreed future due times suppress ordinary reminders until
-due. A verified Business route is preferred; otherwise the authorized group is
-used. Never change route after an attempt. Staff private replies are Business
-only. Work can continue in the group when the private Business window is absent.
+One short question at a time per employee, then wait for their reply. Daily touch
+has priority. Agreed future due times suppress ordinary reminders until due.
+All individual assignments, reminders and staff private replies are Business-only.
+There is NO group fallback. A blocked private item prevents daily duplicate queues;
+unknown delivery is held for reconciliation. Group responses answer group questions
+without publishing individual instructions or private task information.
 
 Private `/data/delivery_notices.json`: enabled true, manager existing admin key,
 started_at positive timestamp, transport business or business_or_bot. Only Mike
