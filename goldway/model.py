@@ -60,6 +60,9 @@ shown by code on the proposal and starts only after manager confirmation.
 """
 
 def response_schema(context):
+    if context.get("kind") == "group_daily":
+        from .group_daily import SCHEMA
+        return SCHEMA
     nullable_text={'type':['string','null']}
     action={'type':'object','additionalProperties':False,'properties':{
         'op':{'type':'string','enum':['create','update']},
@@ -271,6 +274,9 @@ class JsonModel:
         from .provider_dialogue import model_input
         content, history = model_input(context)
         system = SYSTEM + (INTELLIGENCE_SYSTEM if context.get('intelligence') else '')
+        if context.get('kind') == 'group_daily':
+            from .group_daily import SYSTEM as GROUP_SYSTEM
+            system = GROUP_SYSTEM
         if len(content) + sum(len(turn['content']) for turn in history) > c.get('max_context_chars', 24000):
             raise ValueError('Model context limit exceeded; split transcript explicitly')
         api = c.get('api', 'chat_completions')

@@ -151,6 +151,8 @@ def run(e, run_seconds=None):
     from .design_brief_command import make_task_brief_guard
     from .selected_knowledge_command import make_delivery_guard as make_selected_knowledge_guard
     updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e),personal_list_guard=make_reference_list_guard(e),own_impediments_guard=make_impediments_guard(e),task_brief_guard=make_task_brief_guard(e),selected_knowledge_guard=make_selected_knowledge_guard(e)); dispatch.recover()
+    from .group_daily import start as start_group_daily
+    group_daily=start_group_daily(e,api,bot)
     sheets=None
     if e.c.get('sheets_write'):
         import gspread
@@ -184,7 +186,8 @@ def run(e, run_seconds=None):
             for u in batch:
                 # Processing update + persisted offset is atomic. Events can be handled after commit.
                 try:
-                    updates.handle(u)
+                    if group_daily is None or not group_daily.handle(u):
+                        updates.handle(u)
                 except Exception as exc:
                     e.s.event(e.b,f"telegram-failure:{u['update_id']}",'telegram_failure',u)
                     e.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__,e.b,f"telegram-failure:{u['update_id']}"))
@@ -203,6 +206,9 @@ def run(e, run_seconds=None):
         day=datetime.fromtimestamp(time.time(),e.tz).date().isoformat()
         if e.c.get('daily_summary',True):e.queue_summary('daily:'+day)
         dispatch.flush(lambda:stop)
+        if group_daily is not None:
+            try:group_daily.tick(lambda:stop)
+            except Exception:print("group_daily_unavailable",file=sys.stderr)
         if stop:break
         e.s.execute('INSERT INTO runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(e.b+':heartbeat',str(time.time())))
         counters['completed_cycles']+=1
