@@ -108,6 +108,10 @@ class Dispatcher:
         self.s.execute("UPDATE outbox SET state='unknown',error='Process stopped during send; manual reconciliation required' WHERE business=? AND state='sending'",(self.b,))
 
     def route(self, recipient, preferred=None):
+        private_only=preferred=='private_only'
+        if private_only:preferred=None
+        business_only=preferred=='business_only'
+        if business_only:preferred='business'
         allowed=self.c.get('allowed_live_recipients')
         if allowed is not None and recipient not in allowed and not (self.c.get('allow_onboarding_replies') and recipient.startswith('pending:')) and not (self.c.get('allow_registered_replies') and preferred is not None and recipient in self.c['employees']): raise DeliveryError('blocked','Recipient outside configured pilot allowlist')
         row=self.s.execute('SELECT * FROM chats WHERE business=? AND recipient=?',(self.b,recipient)).fetchone()
@@ -125,11 +129,11 @@ class Dispatcher:
         # Private inbound (/start) persists bot_chat; it must match this employee.
         employee=self.c.get('employees',{}).get(recipient,{})
         uid=employee.get('telegram_user_id') if isinstance(employee,dict) else None
-        bot_fallback=(preferred=='business' and self.c.get('business_bot_fallback') is True
+        bot_fallback=(not business_only and preferred=='business' and self.c.get('business_bot_fallback') is True
                       and type(uid) is int and uid>0 and str(row['bot_chat'])==str(uid))
         if (preferred in (None,'bot') or bot_fallback) and row['bot_chat']:
             return {'chat_id':row['bot_chat']},'bot'
-        if preferred in (None,'group') and row['group_chat']:
+        if not private_only and preferred in (None,'group') and row['group_chat']:
             try:
                 info=self.api.call('getChat',chat_id=row['group_chat'])
                 if info.get('type','supergroup') not in ('group','supergroup'): raise DeliveryError('blocked','Configured group is not a group chat')
@@ -147,6 +151,8 @@ class Dispatcher:
         if not self.c.get('live_send',False): return
         for row in self.s.rows("SELECT * FROM outbox WHERE business=? AND state IN ('pending','retry','blocked') AND next_at<=? ORDER BY id LIMIT 50",(self.b,self.now())):
             if should_stop():break
+            from .delivery_notices import permitted as work_delivery_permitted
+            if not work_delivery_permitted(self.s,self.b,row):continue
             try:
                 if not self._weekly_permitted(row):continue
                 if not self._personal_list_permitted(row):continue
@@ -194,6 +200,7 @@ class Dispatcher:
                         cancel(self.s,self.b,row['id']);continue
                     raise
                 with self.s.transaction():
+                    if not work_delivery_permitted(self.s,self.b,row):continue
                     if not self._weekly_permitted(row,route,transport):continue
                     if not self._personal_list_permitted(row,route,transport):continue
                     if not self._own_impediments_permitted(row,route,transport):continue
@@ -248,6 +255,7 @@ class Dispatcher:
 class Updates:
     def __init__(self, engine, telegram, bot_id):
         self.e,self.s,self.c,self.api,self.bot_id=engine,engine.s,engine.c,telegram,str(bot_id)
+        self.work=None
 
     def person(self, user_id):
         if user_id is None:return None
@@ -336,6 +344,8 @@ class Updates:
                 if not directed:return
                 if group not in [str(x) for x in self.c.get('allowed_group_ids',[])]: return
                 self.s.execute('INSERT INTO chats(business,recipient,group_chat,group_thread_id) VALUES(?,?,?,?) ON CONFLICT(business,recipient) DO UPDATE SET group_chat=excluded.group_chat,group_thread_id=excluded.group_thread_id',(b,sender,group,m.get('message_thread_id') if m.get('message_thread_id')!=1 else None))
+        if self.work is not None and self.work.handle_private(m,sender,conn):
+            return
         text=m.get('text',m.get('caption',''))
         source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
         from .answer_citations import observe_inbound

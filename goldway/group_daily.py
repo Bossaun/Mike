@@ -136,7 +136,7 @@ class GroupDaily:
                 (self.e.b,self.c['chat_id'],self.e.b,self.c['chat_id']))
         return True
 
-    def rights(self):
+    def rights(self, require_read=True):
         # Fetch fresh membership and privacy state; cached getMe cannot grant access.
         bot = self.api.call('getMe')
         if bot.get('id') != self.bot['id']:
@@ -150,7 +150,7 @@ class GroupDaily:
         send = admin or (role == 'member' and group.get('permissions', {}).get('can_send_messages', True))
         send = send or (role == 'restricted' and member.get('is_member') is True and member.get('can_send_messages') is True)
         read = admin or (send and bot.get('can_read_all_group_messages') is True)
-        return bool(send and read)
+        return bool(send and (read or not require_read))
 
     def context(self):
         rows = self.s.rows('''SELECT message_id,at,author,body FROM group_daily_messages

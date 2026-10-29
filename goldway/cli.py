@@ -153,6 +153,11 @@ def run(e, run_seconds=None):
     updates=Updates(e,api,bot['id']); dispatch=Dispatcher(e.s,e.c,api,weekly_guard=make_delivery_guard(e),personal_list_guard=make_reference_list_guard(e),own_impediments_guard=make_impediments_guard(e),task_brief_guard=make_task_brief_guard(e),selected_knowledge_guard=make_selected_knowledge_guard(e)); dispatch.recover()
     from .group_daily import start as start_group_daily
     group_daily=start_group_daily(e,api,bot)
+    from .delivery_notices import DeliveryNotices
+    from .group_work import start as start_group_work
+    notices=DeliveryNotices(e.s,e.c,getattr(e,'now',time.time))
+    group_work=start_group_work(group_daily,notices)
+    if group_work is not None:updates.work=group_work
     sheets=None
     if e.c.get('sheets_write'):
         import gspread
@@ -180,7 +185,9 @@ def run(e, run_seconds=None):
     while not stop and (deadline is None or time.monotonic()<deadline):
         offset=e.s.execute('SELECT value FROM runtime WHERE key=?',(e.b+':offset',)).fetchone()
         try:
-            batch=api.call('getUpdates',offset=int(offset[0]) if offset else 0,timeout=min(25,max(0,int(deadline-time.monotonic()))) if deadline is not None else 25,allowed_updates=ALLOWED_UPDATES)
+            poll_timeout=min(25,max(0,int(deadline-time.monotonic()))) if deadline is not None else 25
+            if group_work is not None and group_work.pending():poll_timeout=0
+            batch=api.call('getUpdates',offset=int(offset[0]) if offset else 0,timeout=poll_timeout,allowed_updates=ALLOWED_UPDATES)
             counters['poll_batches']+=1
             counters['received_updates']+=len(batch)
             for u in batch:
@@ -188,6 +195,8 @@ def run(e, run_seconds=None):
                 try:
                     if group_daily is None or not group_daily.handle(u):
                         updates.handle(u)
+                    elif group_work is not None:
+                        group_work.handle(u)
                 except Exception as exc:
                     e.s.event(e.b,f"telegram-failure:{u['update_id']}",'telegram_failure',u)
                     e.s.execute("UPDATE events SET state='failed',error=? WHERE business=? AND id=?",(type(exc).__name__,e.b,f"telegram-failure:{u['update_id']}"))
@@ -206,9 +215,14 @@ def run(e, run_seconds=None):
         day=datetime.fromtimestamp(time.time(),e.tz).date().isoformat()
         if e.c.get('daily_summary',True):e.queue_summary('daily:'+day)
         dispatch.flush(lambda:stop)
-        if group_daily is not None:
+        if group_work is not None:
+            try:group_work.tick(lambda:stop)
+            except Exception:print("group_work_unavailable",file=sys.stderr)
+        elif group_daily is not None:
             try:group_daily.tick(lambda:stop)
             except Exception:print("group_daily_unavailable",file=sys.stderr)
+        try:notices.tick()
+        except Exception:print("delivery_notices_unavailable",file=sys.stderr)
         if stop:break
         e.s.execute('INSERT INTO runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(e.b+':heartbeat',str(time.time())))
         counters['completed_cycles']+=1

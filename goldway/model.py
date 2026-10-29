@@ -60,6 +60,9 @@ shown by code on the proposal and starts only after manager confirmation.
 """
 
 def response_schema(context):
+    if context.get("kind") == "group_work":
+        from .group_work import SCHEMA
+        return SCHEMA
     if context.get("kind") == "group_daily":
         from .group_daily import SCHEMA
         return SCHEMA
@@ -274,6 +277,9 @@ class JsonModel:
         from .provider_dialogue import model_input
         content, history = model_input(context)
         system = SYSTEM + (INTELLIGENCE_SYSTEM if context.get('intelligence') else '')
+        if context.get('kind') == 'group_work':
+            from .group_work import SYSTEM as GROUP_WORK_SYSTEM
+            system = GROUP_WORK_SYSTEM
         if context.get('kind') == 'group_daily':
             from .group_daily import SYSTEM as GROUP_SYSTEM
             system = GROUP_SYSTEM
