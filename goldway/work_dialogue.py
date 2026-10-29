@@ -28,11 +28,11 @@ def conversation(work, message):
     else:
         for r in work.s.rows("SELECT text,created FROM group_work_sends WHERE business=? AND chat_id=? AND state='sent' ORDER BY created DESC LIMIT 6",(work.e.b,work.c['chat_id'])):
             items.append({'role':'assistant','text':r['text'][:800],'at':r['created'],'kind':'reply'})
-    for r in work.s.rows("SELECT payload FROM group_work_events WHERE business=? AND chat_id=? AND message_id!=? AND state='done' ORDER BY rowid DESC LIMIT 40",(work.e.b,work.c['chat_id'],message['id'])):
+    for r in work.s.rows("SELECT payload FROM group_work_events WHERE business=? AND chat_id=? AND message_id!=? AND (state='done' OR json_extract(payload,'$.photo_state')='done') ORDER BY rowid DESC LIMIT 40",(work.e.b,work.c['chat_id'],message['id'])):
         m=json.loads(r['payload'])
         if bool(m.get('private'))!=bool(private) or (private and m['actor']!=actor):continue
         if m.get('at',0)>message.get('at',work.e.now()):continue
-        items.append({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message'})
+        items.append(dict({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message'}, **({'photo_reading':{k:v[:2000] for k,v in m['photo_reading'].items()}} if m.get('photo_reading') else {})))
     return sorted([x for x in items if x['at']<=message.get('at',work.e.now())],key=lambda x:x['at'])[-10:]
 
 

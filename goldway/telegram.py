@@ -30,6 +30,27 @@ class Telegram:
             raise DeliveryError('failed',f'Telegram rejected request ({code})')
         return data['result']
 
+    def photo(self, file_id):
+        from .photo_reading import MAX_IMAGE_BYTES,mime_type
+        import re
+        file=self.call('getFile',file_id=file_id)
+        path=file.get('file_path','')
+        if (type(file.get('file_size')) is not int or not 0<file['file_size']<=MAX_IMAGE_BYTES
+                or not isinstance(path,str) or not re.fullmatch(r'[A-Za-z0-9_/.-]{1,512}',path)
+                or path.startswith('/') or '..' in path.split('/')):
+            raise ValueError('Invalid Telegram image file')
+        try:
+            with self.client.stream('GET',self.base.replace('/bot','/file/bot')+path,follow_redirects=False) as r:
+                if r.status_code!=200:raise ValueError('Image download unavailable')
+                body=bytearray()
+                for chunk in r.iter_bytes(chunk_size=65536):
+                    body.extend(chunk)
+                    if len(body)>MAX_IMAGE_BYTES:raise ValueError('Image size limit')
+            body=bytes(body);mime_type(body)
+            return body
+        except httpx.HTTPError:
+            raise RuntimeError('Telegram image download failed') from None
+
     def document(self, file_id):
         file=self.call('getFile',file_id=file_id)
         if type(file.get('file_size')) is not int or not 0 < file['file_size'] <= 64000:
@@ -346,6 +367,8 @@ class Updates:
                 self.s.execute('INSERT INTO chats(business,recipient,group_chat,group_thread_id) VALUES(?,?,?,?) ON CONFLICT(business,recipient) DO UPDATE SET group_chat=excluded.group_chat,group_thread_id=excluded.group_thread_id',(b,sender,group,m.get('message_thread_id') if m.get('message_thread_id')!=1 else None))
         if self.work is not None and self.work.handle_private(m,sender,conn):
             return
+        from .photo_reading import attachment as image_attachment
+        if image_attachment(m):return  # Never pass image-only input into the legacy text engine.
         text=m.get('text',m.get('caption',''))
         source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
         from .answer_citations import observe_inbound

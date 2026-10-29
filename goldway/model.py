@@ -274,9 +274,19 @@ class JsonModel:
 
     def propose(self, context):
         c = self.config
+        image=context.get('_image')
+        if image is not None:
+            if context.get('kind')!='image_transcription' or c['provider']!='openai' or c['model']!='gpt-4.1-mini':
+                raise ValueError('Unsupported image model context')
+            from .photo_reading import data_url
+            image_url=data_url(image)
+            context={k:v for k,v in context.items() if k!='_image'}
         from .provider_dialogue import model_input
         content, history = model_input(context)
         system = SYSTEM + (INTELLIGENCE_SYSTEM if context.get('intelligence') else '')
+        if context.get('kind') == 'image_transcription':
+            from .photo_reading import SYSTEM as PHOTO_SYSTEM
+            system = PHOTO_SYSTEM
         if context.get('kind') == 'group_work':
             from .group_work import SYSTEM as GROUP_WORK_SYSTEM
             system = GROUP_WORK_SYSTEM
@@ -290,12 +300,17 @@ class JsonModel:
             raise ValueError('Unsupported model API selection')
         payload = None
         schema = response_schema(context)
+        if context.get('kind')=='image_transcription':
+            from .photo_reading import SCHEMA
+            schema=SCHEMA
         schema_bytes = (len(json.dumps(schema, ensure_ascii=False).encode())
-                        if context.get('intelligence') and c['provider'] == 'openai'
+                        if (context.get('intelligence') or image is not None) and c['provider'] == 'openai'
                         and (api == 'responses' or not c.get('json_mode')) else 0)
         if api == 'responses':
             from .responses import responses_payload
             payload = responses_payload(c, system, content, schema, history=history)
+            if image is not None:
+                payload['input'][-1]['content']=[{'type':'input_text','text':content},{'type':'input_image','image_url':image_url,'detail':'high'}]
         timeout = c.get('timeout_seconds',60)
         if type(timeout) not in (int,float) or not 0 < timeout <= 180:
             raise ValueError('Model timeout must be positive and at most 180 seconds')
@@ -303,6 +318,9 @@ class JsonModel:
         # UTF-8 bytes bound input tokens conservatively; output has a hard provider limit.
         input_bound = (len(content.encode()) + len(system.encode())
                        + sum(len(turn['content'].encode()) for turn in history) + schema_bytes + 1024)
+        if image is not None:
+            from .photo_reading import IMAGE_INPUT_BOUND
+            input_bound += IMAGE_INPUT_BOUND
         input_rate, output_rate = c['input_per_million'], c['output_per_million']
         threshold = c.get('long_context_threshold')
         if threshold is not None:
@@ -344,7 +362,7 @@ class JsonModel:
                         headers={'Authorization':'Bearer '+self.key},
                         json={'model':c['model'],'max_completion_tokens':c.get('max_output_tokens',3000),
                               'response_format':({'type':'json_object'} if c.get('json_mode') else {'type':'json_schema','json_schema':{'name':'goldway_actions','strict':True,'schema':schema}}),
-                              'messages':[{'role':'system','content':system}] + history + [{'role':'user','content':content}]})
+                              'messages':[{'role':'system','content':system}] + history + [{'role':'user','content':([{'type':'text','text':content},{'type':'image_url','image_url':{'url':image_url,'detail':'high'}}] if image is not None else content)}]})
                     r.raise_for_status(); data=r.json(); raw=data['choices'][0]['message']['content']
                     usage=data.get('usage',{}); inp=usage.get('prompt_tokens',0); out=usage.get('completion_tokens',0)
                     if data['choices'][0].get('finish_reason')=='length': raise ValueError('Model output truncated')

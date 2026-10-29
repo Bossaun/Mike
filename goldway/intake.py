@@ -74,9 +74,12 @@ def accepts_team(update, config, now):
     if set(update) != {'update_id', kind}:
         return False
     message = update[kind]
+    from .photo_reading import attachment as image_attachment,MAX_IMAGE_BYTES
+    image=bool(isinstance(message,dict) and image_attachment(message))
     attachment = isinstance(message, dict) and 'document' in message
     content_fields = ({'message_id', 'date', 'chat', 'from', 'document', 'caption', 'caption_entities'}
                       if attachment else TEXT_FIELDS | {'reply_to_message'})
+    if image:content_fields={'message_id','date','chat','from','photo','document','caption','caption_entities','reply_to_message','media_group_id','has_media_spoiler','show_caption_above_media'}
     allowed = content_fields | ({'business_connection_id'} if business else set())
     if (not isinstance(message, dict) or not set(message) <= allowed
             or not isinstance(message.get('from'), dict)):
@@ -87,7 +90,11 @@ def accepts_team(update, config, now):
             or (business and (sender == account or not isinstance(conn, str) or not conn))):
         return False
 
-    if attachment:
+    if image:
+        if ('text' in message or ('caption' in message and (not isinstance(message['caption'],str) or len(message['caption'])>1024))
+                or ('caption_entities' in message and not isinstance(message['caption_entities'],list))
+                or (attachment and (type(message['document'].get('file_size')) is not int or not 0<message['document']['file_size']<=MAX_IMAGE_BYTES))):return False
+    if attachment and not image:
         admin_ids = {config['employees'][key]['telegram_user_id'] for key in config['admins']}
         doc = message['document']
         if (sender not in admin_ids or not isinstance(doc, dict)
@@ -107,13 +114,15 @@ def accepts_team(update, config, now):
                 and isinstance(part.get('from'), dict)
                 and (is_attachment or (isinstance(part.get('text'), str) and bool(part['text'].strip()))))
 
-    if not fresh_text(message, allowed, attachment) or message['from'].get('is_bot', False):
+    if not fresh_text(message, allowed, attachment or image) or message['from'].get('is_bot', False):
         return False
     parent = message.get('reply_to_message')
     if parent is None:
         return True
     parent_fields = TEXT_FIELDS | ({'business_connection_id', 'sender_business_bot'} if business else set())
-    if (not fresh_text(parent, parent_fields)
+    parent_image=bool(isinstance(parent,dict) and image_attachment(parent))
+    if parent_image:parent_fields|={'photo','document','caption','caption_entities','media_group_id','has_media_spoiler','show_caption_above_media'}
+    if (not fresh_text(parent, parent_fields,parent_image)
             or (business and parent.get('business_connection_id') != conn)):
         return False
     author = parent['from'].get('id')
