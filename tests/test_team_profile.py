@@ -136,7 +136,8 @@ def test_unapproved_update_rejected_before_persistence(profile, tmp_path, change
     engine, store, api, _ = runtime(profile, tmp_path)
     Updates(engine, api, 900).handle(update)
     assert not store.rows('SELECT * FROM events')
-    assert not store.rows('SELECT * FROM runtime')
+    if change=='forward':assert accepts(update,profile,1200)  # Accepted only as data; legacy engine remains untouched.
+    else:assert not store.rows('SELECT * FROM runtime')
     assert not api.calls
 
 

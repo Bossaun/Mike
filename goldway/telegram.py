@@ -369,6 +369,10 @@ class Updates:
             return
         from .photo_reading import attachment as image_attachment
         if image_attachment(m):return  # Never pass image-only input into the legacy text engine.
+        from .intake import FORWARD_FIELDS
+        if FORWARD_FIELDS.intersection(m):return  # Forwarded material never grants legacy task authority.
+        if any(k in m for k in ('voice','audio','video','animation','sticker','video_note')):return
+        if m.get('document') and not (sender in self.c['admins'] and m['document'].get('file_name','').lower().endswith('.txt')):return
         text=m.get('text',m.get('caption',''))
         source=f"business:{conn}:{m['chat']['id']}:{m['message_id']}" if conn else f"telegram:{m['chat']['id']}:{m['message_id']}"
         from .answer_citations import observe_inbound

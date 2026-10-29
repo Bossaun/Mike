@@ -151,4 +151,5 @@ def test_real_updates_gate_accepts_team_images(r,channel,as_document,parent):
  rows=r.s.rows('SELECT payload FROM group_work_events');assert len(rows)==1
  m=json.loads(rows[0]['payload']);assert m['private']=='dasha_it' and m['image'] and m['text']==''
  message['message_id']=11;message['forward_origin']={'type':'user'};update['update_id']=11;updates.handle(update)
- assert len(r.s.rows('SELECT payload FROM group_work_events'))==1
+ assert len(r.s.rows('SELECT payload FROM group_work_events'))==2
+ assert json.loads(r.s.rows('SELECT payload FROM group_work_events')[-1]['payload'])['forwarded']

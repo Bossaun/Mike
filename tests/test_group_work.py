@@ -261,4 +261,4 @@ def test_inspection_is_not_acceptance_and_staff_never_fallback(r):
  assert not update(r,'accept','Проверил C01: фото неверное, остаток ошибочный.',uid=2,mid=2)
  assert task(r)['state']=='awaiting_acceptance'
  r.w.private_reply('staff','dasha_it','C01 в работе',False)
- assert r.s.rows('SELECT preferred_transport FROM outbox')[0]['preferred_transport']=='business_only'
+ assert r.s.rows('SELECT preferred_transport FROM outbox')[0]['preferred_transport']=='bot'

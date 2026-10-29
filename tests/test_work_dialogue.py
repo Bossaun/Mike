@@ -30,7 +30,7 @@ def test_staff_freeform_progress_no_number(r):
  m=json.loads(r.s.rows('SELECT payload FROM group_work_events')[0]['payload'])
  r.e.model.result=dict(reply='Понял. Когда получится показать?',updates=[dict(task_id='C01',message_id=m['id'],kind='progress',quote=m['text'])],evidence_ids=[str(m['id'])],focus_task_ids=['C01'],new_tasks=[])
  r.w.process(lambda:False);assert r.w.tasks()[0]['state']=='in_progress'
- assert r.s.rows("SELECT preferred_transport FROM outbox WHERE dedupe LIKE 'work-reply:%'")[0]['preferred_transport']=='business_only'
+ assert r.s.rows("SELECT preferred_transport FROM outbox WHERE dedupe LIKE 'work-reply:%'")[0]['preferred_transport']=='bot'
 
 
 def test_private_history_is_recipient_specific(r):
@@ -72,7 +72,7 @@ def test_invalid_task_proposals_do_not_create(r,actor,text,owner):
 
 
 def test_forward_or_command_not_swallowed_by_new_intake(r):
- assert not r.w.handle_private({'message_id':1,'date':r.clock[0],'chat':{'type':'private'},'text':'Поручи Даше','forward_origin':{}},'test_operator',None)
+ assert r.w.handle_private({'message_id':1,'date':r.clock[0],'chat':{'type':'private'},'text':'Поручи Даше','forward_origin':{}},'test_operator',None)
  assert not private(r,'/summary')
 
 

@@ -10,6 +10,8 @@ FORBIDDEN_FIELDS = {
 }
 
 
+FORWARD_FIELDS={'forward_origin','forward_from','forward_from_chat','forward_date','forward_sender_name','is_automatic_forward'}
+
 TEAM_RECIPIENTS = ('test_operator', 'frost', 'alen', 'nastya', 'dasha_it')
 TEXT_FIELDS = {'message_id', 'date', 'chat', 'from', 'text', 'entities', 'link_preview_options'}
 
@@ -77,10 +79,17 @@ def accepts_team(update, config, now):
     from .photo_reading import attachment as image_attachment,MAX_IMAGE_BYTES
     image=bool(isinstance(message,dict) and image_attachment(message))
     attachment = isinstance(message, dict) and 'document' in message
+    media_fields={'voice','audio','video','animation','sticker','video_note'}
+    admin_ids = {config['employees'][key]['telegram_user_id'] for key in config['admins']}
+    doc=message.get('document',{}) if isinstance(message,dict) else {}
+    text_doc=bool(attachment and isinstance(doc,dict) and message.get('from',{}).get('id') in admin_ids and isinstance(doc.get('file_name'),str) and doc['file_name'].lower().endswith('.txt'))
+    unsupported=bool(isinstance(message,dict) and (media_fields.intersection(message) or (attachment and not image and not text_doc)))
     content_fields = ({'message_id', 'date', 'chat', 'from', 'document', 'caption', 'caption_entities'}
                       if attachment else TEXT_FIELDS | {'reply_to_message'})
     if image:content_fields={'message_id','date','chat','from','photo','document','caption','caption_entities','reply_to_message','media_group_id','has_media_spoiler','show_caption_above_media'}
-    allowed = content_fields | ({'business_connection_id'} if business else set())
+    if unsupported:content_fields={'message_id','date','chat','from','document','caption','caption_entities','reply_to_message','media_group_id'}|media_fields
+    forward_fields=FORWARD_FIELDS
+    allowed = content_fields | forward_fields | ({'business_connection_id'} if business else set())
     if (not isinstance(message, dict) or not set(message) <= allowed
             or not isinstance(message.get('from'), dict)):
         return False
@@ -94,7 +103,7 @@ def accepts_team(update, config, now):
         if ('text' in message or ('caption' in message and (not isinstance(message['caption'],str) or len(message['caption'])>1024))
                 or ('caption_entities' in message and not isinstance(message['caption_entities'],list))
                 or (attachment and (type(message['document'].get('file_size')) is not int or not 0<message['document']['file_size']<=MAX_IMAGE_BYTES))):return False
-    if attachment and not image:
+    if attachment and not image and not unsupported:
         admin_ids = {config['employees'][key]['telegram_user_id'] for key in config['admins']}
         doc = message['document']
         if (sender not in admin_ids or not isinstance(doc, dict)
@@ -114,12 +123,12 @@ def accepts_team(update, config, now):
                 and isinstance(part.get('from'), dict)
                 and (is_attachment or (isinstance(part.get('text'), str) and bool(part['text'].strip()))))
 
-    if not fresh_text(message, allowed, attachment or image) or message['from'].get('is_bot', False):
+    if not fresh_text(message, allowed, attachment or image or unsupported) or message['from'].get('is_bot', False):
         return False
     parent = message.get('reply_to_message')
     if parent is None:
         return True
-    parent_fields = TEXT_FIELDS | ({'business_connection_id', 'sender_business_bot'} if business else set())
+    parent_fields = TEXT_FIELDS | forward_fields | ({'business_connection_id', 'sender_business_bot'} if business else set())
     parent_image=bool(isinstance(parent,dict) and image_attachment(parent))
     if parent_image:parent_fields|={'photo','document','caption','caption_entities','media_group_id','has_media_spoiler','show_caption_above_media'}
     if (not fresh_text(parent, parent_fields,parent_image)

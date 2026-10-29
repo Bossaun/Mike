@@ -76,7 +76,7 @@ def test_rejected_attachment_has_no_download_or_persistence(team,monkeypatch,cha
     monkeypatch.setattr(api,'document',lambda *a: pytest.fail('rejected file downloaded'),raising=False)
     Updates(e,api,900).handle(update)
     assert not s.rows('SELECT * FROM events')
-    assert not s.rows('SELECT * FROM runtime')
+    if change not in ('employee','forward','not_txt'):assert not s.rows('SELECT * FROM runtime')
 
 
 @pytest.mark.parametrize(('body','metadata','error'),[

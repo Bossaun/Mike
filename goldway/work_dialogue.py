@@ -32,7 +32,7 @@ def conversation(work, message):
         m=json.loads(r['payload'])
         if bool(m.get('private'))!=bool(private) or (private and m['actor']!=actor):continue
         if m.get('at',0)>message.get('at',work.e.now()):continue
-        items.append(dict({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message'}, **({'photo_reading':{k:v[:2000] for k,v in m['photo_reading'].items()}} if m.get('photo_reading') else {})))
+        items.append(dict({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message','forwarded':bool(m.get('forwarded'))}, **({'photo_reading':{k:v[:2000] for k,v in m['photo_reading'].items()}} if m.get('photo_reading') else {})))
     return sorted([x for x in items if x['at']<=message.get('at',work.e.now())],key=lambda x:x['at'])[-10:]
 
 
@@ -81,7 +81,7 @@ def instruction_for(work, message, owner):
 
 
 def create_tasks(work, proposals, message):
-    if not work.current() or message['actor'] not in work.e.c['admins']:return []
+    if not work.current() or message.get('forwarded') or message['actor'] not in work.e.c['admins']:return []
     if not isinstance(proposals,list):return []
     from .intake import TEAM_RECIPIENTS
     notes=[];contacted=set()
