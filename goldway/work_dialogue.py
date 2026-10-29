@@ -115,6 +115,17 @@ def create_tasks(work, proposals, message):
     return notes
 
 
+def waiting_for_reply(work, owner):
+    """Do not stack an assignment on a pending message or unanswered question."""
+    today=datetime.fromtimestamp(work.e.now(),ZoneInfo(work.d.c['timezone'])).date()
+    replies=[json.loads(r['payload']) for r in work.s.rows("SELECT payload FROM group_work_events WHERE business=? AND chat_id=? AND state='done' ORDER BY rowid DESC LIMIT 80",(work.e.b,work.c['chat_id']))]
+    last_inbound=max((m.get('at',0) for m in replies if m['actor']==owner and m.get('private')),default=0)
+    for row in work.s.rows("SELECT o.state,COALESCE((SELECT MAX(d.at) FROM deliveries d WHERE d.outbox_id=o.id AND d.state='sent'),o.created) AS delivered_at FROM outbox o WHERE business=? AND recipient=? AND (dedupe LIKE 'work-followup:%' OR dedupe LIKE 'work-reply:%') ORDER BY id DESC LIMIT 30",(work.e.b,owner)):
+        if row['state'] in ('pending','sending','retry','blocked','unknown'):return True
+        if row['state']=='sent' and row['delivered_at']>=last_inbound and datetime.fromtimestamp(row['delivered_at'],ZoneInfo(work.d.c['timezone'])).date()==today:return True
+    return False
+
+
 def dispatch_task(work, tid):
     t=next((t for t in work.tasks() if t['id']==tid),None)
     if not t or not work.current():return 'blocked'
@@ -124,6 +135,7 @@ def dispatch_task(work, tid):
     old_group=work.s.execute('SELECT state FROM group_work_sends WHERE business=? AND chat_id=? AND key=?',(work.e.b,work.c['chat_id'],key)).fetchone()
     if old_group:return 'group_sent' if old_group['state']=='sent' else 'blocked'
     if work.s.execute("SELECT 1 FROM outbox WHERE business=? AND recipient=? AND dedupe LIKE 'work-%' AND state='unknown'",(work.e.b,t['owner'])).fetchone():return 'blocked'
+    if waiting_for_reply(work,t['owner']):return 'later'
     text=work.c['participants'][t['owner']]['name']+', Майк просит: '+t['ask']
     if len(text)>350:text=work.c['participants'][t['owner']]['name']+', нужно '+t['title']+'. Сможете взять это после текущей задачи?'
     from .delivery_notices import seal_queue

@@ -376,6 +376,8 @@ class GroupWork:
             byowner.setdefault(owner,[]).append(t)
         for owner,items in byowner.items():
             if stop() or not self.current():return
+            from .work_dialogue import waiting_for_reply
+            if waiting_for_reply(self,owner):continue
             last=self.s.execute("SELECT * FROM outbox WHERE business=? AND recipient=? AND dedupe LIKE 'work-followup:%' ORDER BY id DESC LIMIT 1",(self.e.b,owner)).fetchone()
             if last and last['state'] in ('pending','sending','retry','blocked','unknown'):continue
             # Never bridge an uncertain send through a different route or later day.

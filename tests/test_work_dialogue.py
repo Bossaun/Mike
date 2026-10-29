@@ -172,3 +172,28 @@ def test_negated_or_reported_requests_cannot_create_tasks(r,text):
  p=proposal();p['quote']=text
  assert not create_tasks(r.w,[p],msg(r,text))
  assert len(r.w.tasks())==1
+
+
+def test_new_assignment_does_not_stack_on_pending_private_question(r):
+ r.w.private_reply('question','dasha_it','Когда сможете показать фото?',False)
+ notes=create_tasks(r.w,[proposal()],msg(r))
+ assert notes and 'после текущей' in notes[0]
+ assert not r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'")
+
+
+def test_followup_waits_after_private_dialogue_reply(r):
+ r.w.private_reply('question','dasha_it','Когда сможете показать фото?',False)
+ r.s.execute("UPDATE outbox SET state='sent' WHERE dedupe LIKE 'work-reply:%'")
+ r.w.followups(lambda:False)
+ assert not r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'")
+ r.clock[0]+=86400;r.w.followups(lambda:False)
+ assert len(r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'"))==1
+
+
+def test_delayed_delivery_waits_from_receipt_not_queue_date(r):
+ r.w.private_reply('question','dasha_it','Когда сможете показать фото?',False)
+ r.s.execute("UPDATE outbox SET state='sent',created=created-86400")
+ oid=r.s.rows('SELECT id FROM outbox')[0]['id']
+ r.s.execute("INSERT INTO deliveries(outbox_id,at,state,detail) VALUES(?,?,'sent','123')",(oid,r.clock[0]))
+ r.w.followups(lambda:False)
+ assert not r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-followup:%'")
