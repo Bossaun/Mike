@@ -39,6 +39,7 @@ photo_reading: это распознанные наблюдения, не про
 Не отправляй отдельные приветствия, мотивационные цитаты или случайные советы:
 тёплая фраза — часть полезного ответа, не новый повод отвлекать. Не более одного
 нейтрального эмодзи, если он уместен; без него тоже нормально.
+Пиши короткими абзацами по 1–2 предложения. Для вопроса отдели контекст пустой строкой; не делай длинную анкету. Не пиши HTML, Markdown-разметку или таблицы: оформление добавит программа.
 Пиши естественно и коротко, как рабочий помощник, а не анкета. Не требуй номера
 задачи, команд или формата даты. Понимай предмет по смыслу, истории и ответу на
 сообщение. «Завтра», «в пятницу», «к вечеру» допустимы; уточняй только реальную
@@ -479,9 +480,18 @@ class GroupWork:
         cfg=self.notices.cfg
         from .delivery_notices import seal_queue
         key='work-digest:'+now.date().isoformat()
-        self.s.queue(self.e.b,cfg['manager'],'\n\n'.join(parts)[:3900],key,self.e.now(),preferred_transport='business_only' if cfg['transport']=='business' else 'private_only')
-        seal_queue(self.s,self.e.b,key,self.notices.path,cfg)
-        seal_queue(self.s,self.e.b,key,self.path,self.c)
+        # Existing digests are not replayed on a formatting release.
+        if self.s.execute('SELECT 1 FROM outbox WHERE business=? AND dedupe=?',(self.e.b,key)).fetchone():return
+        summary=parts[0]+'\n\n'+'\n'.join(titles[k]+': '+str(len(items)) for k,items in groups.items())
+        summary+='\n\nПодробности пришлю следующим сообщением. Начало и выполнение считаю только по подтверждённым ответам.'
+        route='business_only' if cfg['transport']=='business' else 'private_only'
+        from .message_layout import split_sections
+        messages=[(key,summary)]+[(key+':details:'+str(i), 'Подробности по задачам\n\n'+body) for i,body in enumerate(split_sections('\n\n'.join(parts[1:]),2800),1)]
+        with self.s.transaction():
+            for delivery_key,body in messages:
+                self.s.queue(self.e.b,cfg['manager'],body,delivery_key,self.e.now(),preferred_transport=route)
+                seal_queue(self.s,self.e.b,delivery_key,self.notices.path,cfg)
+                seal_queue(self.s,self.e.b,delivery_key,self.path,self.c)
 
     def pending(self):
         return self.current() and bool(self.s.execute("SELECT 1 FROM group_work_events WHERE business=? AND chat_id=? AND state='pending'",(self.e.b,self.c['chat_id'])).fetchone())

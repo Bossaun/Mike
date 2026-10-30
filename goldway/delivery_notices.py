@@ -54,7 +54,10 @@ class DeliveryNotices:
         # The administrator's own messages, including these receipts, never recurse.
         if recipient==cfg['manager'] or source.startswith('delivery-notice:'):return
         name=self.c.get('employees',{}).get(recipient,{}).get('name',recipient)
-        body=f'Я отправил сообщение: {name}.\n\n{text[:450]}\n\nКопия для вас.'
+        from .message_layout import cut,units
+        copy=cut(text,2800)
+        if units(text)>2800:copy+='\n… Копия сокращена.'
+        body=f'Отправлено: {name}\n\n{copy}\n\nКопия для вас.'
         key='delivery-notice:'+source
         self.s.queue(self.c['business'],cfg['manager'],body,key,
                      self.now(),preferred_transport='business_only' if cfg['transport']=='business' else 'private_only')

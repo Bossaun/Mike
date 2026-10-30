@@ -82,7 +82,7 @@ def test_findings_reach_manager_digest_and_specific_private_followup(r):
  text='Tellmi отсутствует при оформлении заказа'
  record(r.w,[dict(task_id='C01',message_id=3,quote=text)],[dict(id=3,actor='alen',text=text)],{'C01'})
  r.w.digest();r.w.followups(lambda:False)
- assert text in r.s.rows("SELECT text FROM outbox WHERE dedupe LIKE 'work-digest:%'")[0]['text']
+ assert any(text in row['text'] for row in r.s.rows("SELECT text FROM outbox WHERE dedupe LIKE 'work-digest:%'"))
  row=r.s.rows("SELECT text,preferred_transport FROM outbox WHERE dedupe LIKE 'work-followup:%'")[0]
  assert text in row['text'] and row['preferred_transport']=='business_only'
 

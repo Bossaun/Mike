@@ -13,6 +13,10 @@ class Telegram:
         self.base='https://api.telegram.org/bot'+token+'/'
 
     def call(self, method, **params):
+        if method in ('sendMessage','editMessageText') and params.get('text') and not params.get('parse_mode') and 'entities' not in params:
+            from .message_layout import entities
+            styles=entities(params['text'])
+            if styles:params['entities']=styles
         try:
             r=self.client.post(self.base+method,json=params)
             if r.status_code>=500:
@@ -202,6 +206,11 @@ class Dispatcher:
                         cancel(self.s,self.b,row['id']);continue
                     raise DeliveryError('blocked','Knowledge authorization expired or changed; regenerate reply')
                 try:
+                    if row['dedupe'].startswith('work-digest:') and ':details:' in row['dedupe']:
+                        parent,part=row['dedupe'].rsplit(':details:',1)
+                        if int(part)>1:parent+=':details:'+str(int(part)-1)
+                        receipt=self.s.execute("SELECT state FROM outbox WHERE business=? AND recipient=? AND dedupe=?",(self.b,row['recipient'],parent)).fetchone()
+                        if not receipt or receipt['state']!='sent':continue
                     route,transport=self.route(row['recipient'],row['preferred_transport'])
                 except DeliveryError:
                     if row['dedupe'].startswith('selected-knowledge-preview:'):
@@ -260,7 +269,8 @@ class Dispatcher:
                 if not claimed: continue
                 params=dict(route,text=row['text'])
                 if row['parse_mode']:params['parse_mode']=row['parse_mode']
-                result=self.api.call('sendMessage',**params)
+                from .message_layout import send
+                result=send(self.api,params,article=row['dedupe'].startswith('work-digest:') and ':details:' in row['dedupe'] and row['recipient'] in self.c['admins'] and transport=='bot')
                 state='sent'; detail=str(result['message_id'])
                 self.s.execute("UPDATE outbox SET state='sent',message_id=?,error=NULL WHERE id=?",(detail,row['id']))
             except DeliveryError as exc:

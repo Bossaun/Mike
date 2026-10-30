@@ -57,9 +57,9 @@ def test_addressed_message_replies_once_and_notifies_manager(r,text,parent):
  replies=[x for x in r.api.sent if 'reply_parameters' in x];assert len(replies)==1
  assert r.e.model.calls[0]['live_group_access']['can_read_all'] is True
  assert r.e.model.calls[0]['current_messages'][0]['addressed']
- assert len(r.s.rows('SELECT * FROM outbox'))==4
+ assert len(r.s.rows('SELECT * FROM outbox'))==5
  GroupWork(r.d,r.n,r.p).tick();assert len(r.api.sent)==2
- assert len(r.s.rows('SELECT * FROM outbox'))==4
+ assert len(r.s.rows('SELECT * FROM outbox'))==5
 
 @pytest.mark.parametrize('kw',[{'chat':{'id':-99,'type':'group'}},{'date':1},{'from':{'id':99,'is_bot':True}},{'forward_origin':{}},{'sender_chat':{'id':-3}}])
 def test_scope_rejects_old_forwarded_and_bot_messages(r,kw):
@@ -252,7 +252,9 @@ def test_daily_touch_has_separate_reply_anchor(r):
 def test_daily_digest_has_real_states_and_dedupe(r):
  update(r,'progress','Делаю.');r.w.digest();r.w.digest()
  rows=r.s.rows("SELECT * FROM outbox WHERE dedupe LIKE 'work-digest:%'")
- assert len(rows)==1 and 'В работе по ответу исполнителя' in rows[0]['text'] and 'C01' in rows[0]['text']
+ assert len(rows)==2 and 'В работе по ответу исполнителя:' in rows[0]['text']
+ assert 'C01' not in rows[0]['text'] and 'C01' in rows[1]['text']
+ assert rows[1]['dedupe']==rows[0]['dedupe']+':details:1'
  assert rows[0]['preferred_transport']=='private_only'
 
 
