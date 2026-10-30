@@ -62,7 +62,11 @@ shown by code on the proposal and starts only after manager confirmation.
 def response_schema(context):
     if context.get("kind") == "group_work":
         from .group_work import SCHEMA
-        return SCHEMA
+        from copy import deepcopy
+        from .work_evidence import allowed_evidence_ids
+        schema=deepcopy(SCHEMA)
+        schema['properties']['evidence_ids']['items']['enum']=allowed_evidence_ids(context)
+        return schema
     if context.get("kind") == "group_daily":
         from .group_daily import SCHEMA
         return SCHEMA

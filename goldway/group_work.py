@@ -83,7 +83,9 @@ updates: только изменения к перечисленным зада�
 accept (явная приёмка проверяющим), deadline (явное обещание исполнителя со сроком).
 Не выводи обновление из вопроса, цитирования другого человека, будущего обещания
 «сделаю» как выполненной работы. «Готово» без доказательств — только result, не accept.
-Приписывай сообщение его автору. evidence_ids — только текущие message_id, либо seed.
+Приписывай сообщение его автору. evidence_ids — только ID из allowed_evidence_ids.
+Источники из messages нужны для ответа, но НЕ дают права менять задачи: для
+updates/findings/new_tasks по-прежнему нужны текущие сообщение и дословная quote.
 Если обычное сообщение не требует помощи и не содержит результата/препятствия,
 верни пустой reply. До 450 символов, 1–3 коротких предложения, максимум один вопрос.
 Не перечисляй сразу все поручения. Выбери ближайший полезный шаг. Без упрёков,
@@ -385,9 +387,11 @@ class GroupWork:
                 context['messages'].pop(0)
             while len(json.dumps(context,ensure_ascii=False))>21000 and context['conversation']:
                 context['conversation'].pop(0)
+            from .work_evidence import allowed_evidence_ids
+            context['allowed_evidence_ids']=allowed_evidence_ids(context)
             result=self.e.model.propose(context)
             if not isinstance(result,dict) or not {'reply','updates','evidence_ids'}<=set(result) or set(result)-{'reply','updates','evidence_ids','focus_task_ids','new_tasks','findings'} or not isinstance(result['reply'],str) or len(result['reply'])>450 or not isinstance(result['updates'],list) or not isinstance(result['evidence_ids'],list):raise ValueError('invalid_result')
-            ids={'seed',*(str(m['id']) for m in messages)}
+            ids=set(context['allowed_evidence_ids'])
             if any(not isinstance(x,str) or x not in ids for x in result['evidence_ids']):raise ValueError('invalid_evidence')
             if result['reply'] and not result['evidence_ids']:raise ValueError('missing_evidence')
             if not self.current() or stop():return
@@ -404,7 +408,9 @@ class GroupWork:
             focus=[x for x in result.get('focus_task_ids',[]) if x in visible_ids][:5]
             self.s.execute('UPDATE group_work_events SET response=? WHERE business=? AND chat_id=? AND message_id=?',(json.dumps({'focus_task_ids':focus}),self.e.b,self.c['chat_id'],messages[0]['id']))
             for r in rows:self.s.execute("UPDATE group_work_events SET state='done' WHERE business=? AND chat_id=? AND message_id=?",(self.e.b,self.c['chat_id'],r['message_id']))
-        except Exception:
+        except Exception as exc:
+            from .work_evidence import failure_code
+            self.s.audit(self.e.b,'group_work_reply_failure',{'code':failure_code(exc),'scope':'private' if private else 'group'},self.e.now())
             # Do not consume budget in an unbounded retry loop. Fresh message can retry.
             for r in rows:self.s.execute("UPDATE group_work_events SET state='failed' WHERE business=? AND chat_id=? AND message_id=?",(self.e.b,self.c['chat_id'],r['message_id']))
             if addressed:
