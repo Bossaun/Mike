@@ -373,6 +373,8 @@ class GroupWork:
                 participants={k:v['name'] for k,v in self.c['participants'].items()})
             context['reply_scope']='private' if private else 'group'
             from .work_findings import visible as visible_findings
+            from .work_findings import capture_problem
+            capture_problem(self,messages[0],{t['id'] for t in context['tasks']})
             context['findings']=visible_findings(self,messages[0]['actor'],bool(private))
             visible_ids={t['id'] for t in context['tasks']}
             for t in context['tasks']:

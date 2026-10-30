@@ -30,3 +30,23 @@ def test_schema_is_per_context_not_shared():
 
 def test_error_redaction():
     assert failure_code(ValueError('private text or token'))=='processing_error'
+
+
+def test_problem_record_survives_model_failure(r):
+    from goldway.work_findings import visible
+    def broken(ctx):raise RuntimeError('private provider detail')
+    r.e.model.propose=broken
+    inbound(r,'Валли, товар не видно в CRM');r.w.process(lambda:False)
+    findings=visible(r.w,'test_operator',True)
+    assert len(findings)==1 and findings[0]['task_id']==''
+    assert 'не видно' in findings[0]['quote']
+    assert r.s.rows('SELECT state FROM group_work_tasks')[0]['state']=='open'
+
+
+def test_problem_scope_and_no_false_tool_promise(r):
+    from goldway.work_findings import capture_problem,visible,reply_text
+    m={'id':51,'actor':'alen','private':'alen','text':'В CRM нет фото','focus':[]}
+    assert capture_problem(r.w,m,{'C01'})
+    assert not capture_problem(r.w,m,{'C01'})
+    assert not visible(r.w,'dasha_it',True)
+    assert 'не могу' in reply_text('Я проверю карточку на сайте и всё исправлю.',True)

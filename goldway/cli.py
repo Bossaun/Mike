@@ -157,6 +157,8 @@ def run(e, run_seconds=None):
     from .group_work import start as start_group_work
     notices=DeliveryNotices(e.s,e.c,getattr(e,'now',time.time))
     group_work=start_group_work(group_daily,notices)
+    from .verified_updates import VerifiedUpdates
+    verified_updates=VerifiedUpdates(e)
     if group_work is not None:updates.work=group_work
     sheets=None
     if e.c.get('sheets_write'):
@@ -218,9 +220,11 @@ def run(e, run_seconds=None):
         if group_work is not None:
             try:group_work.tick(lambda:stop)
             except Exception:print("group_work_unavailable",file=sys.stderr)
-        elif group_daily is not None:
+        if group_daily is not None:
             try:group_daily.tick(lambda:stop)
             except Exception:print("group_daily_unavailable",file=sys.stderr)
+        try:verified_updates.tick()
+        except Exception:print("verified_updates_unavailable",file=sys.stderr)
         try:notices.tick()
         except Exception:print("delivery_notices_unavailable",file=sys.stderr)
         if stop:break
