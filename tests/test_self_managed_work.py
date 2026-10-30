@@ -13,8 +13,8 @@ def test_alens_problem_is_recorded_by_bot_no_task_status_invented(r):
  r.e.model.result=dict(reply='Алэн, добавь в задачу C03 обновление карточки.',updates=[],new_tasks=[],focus_task_ids=['C01'],evidence_ids=['1'],findings=[dict(task_id='C01',message_id=1,quote=text)])
  r.w.process(lambda:False);r.w.process(lambda:False)
  rows=r.s.rows('SELECT * FROM group_work_findings');assert len(rows)==1 and rows[0]['quote']==text
- assert r.w.tasks()[0]['state']=='open' and 'Проблему записал' in r.api.sent[-1]['text']
- assert 'Алэн, добавь' not in r.api.sent[-1]['text'] and not r.s.rows('SELECT * FROM tasks')
+ assert r.w.tasks()[0]['state']=='open'
+ assert not r.api.sent and not r.s.rows('SELECT * FROM tasks')
 
 
 def test_forwarded_manager_material_cannot_create_or_accept_tasks(r):

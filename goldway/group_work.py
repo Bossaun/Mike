@@ -220,6 +220,10 @@ class GroupWork:
         addressed=(bool(username and re.search(r'(?<!\w)@'+re.escape(username)+r'(?!\w)',text,re.I))
                    or bool(re.match(r'^\s*валли\b',text,re.I))
                    or m.get('reply_to_message',{}).get('from',{}).get('id')==self.d.bot['id'])
+        # A reply to someone else is their conversation, even when it contains
+        # an attachment. GroupDaily independently retains permitted context.
+        parent_author=m.get('reply_to_message',{}).get('from',{}).get('id')
+        if parent_author is not None and parent_author!=self.d.bot['id'] and not addressed:return
         # Only known group participants can mutate their own tasks. Other members
         # can still ask the assistant about this shared group context.
         payload={'id':m['message_id'],'actor':actor,'text':text[:3000],'addressed':addressed,
@@ -415,7 +419,7 @@ class GroupWork:
             body=('\n'.join(notes[:1])+(' Ещё поручений записано: '+str(len(notes)-1)+'.' if len(notes)>1 else '')) if notes else result['reply'].strip()
             if not body and addressed:body='Я на связи. Расскажите, что нужно сделать — можно обычным сообщением.'
             body=reply_text(body,bool(private))
-            if body:
+            if body and (private or addressed):
                 if private:self.private_reply(key,private,body[:3900],messages[0]['connection'])
                 else:self.send(key,'Рабочая группа GOLDWAY',body[:3900],messages[-1]['id'],stop)
             focus=[x for x in result.get('focus_task_ids',[]) if x in visible_ids][:5]

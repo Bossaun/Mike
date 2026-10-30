@@ -264,3 +264,28 @@ def test_inspection_is_not_acceptance_and_staff_never_fallback(r):
  assert task(r)['state']=='awaiting_acceptance'
  r.w.private_reply('staff','dasha_it','C01 в работе',False)
  assert r.s.rows('SELECT preferred_transport FROM outbox')[0]['preferred_transport']=='bot'
+
+
+@pytest.mark.parametrize('author',[{'id':88,'is_bot':True},{'id':2}])
+@pytest.mark.parametrize('media',[{}, {'photo':[{'file_id':'photo','width':100,'height':100}]}, {'voice':{'file_id':'voice','duration':5,'file_size':100}}])
+def test_foreign_reply_is_passive_even_with_media(r,author,media):
+ inbound(r,'не нужно',uid=1,reply_to_message={'message_id':77,'from':author},**media)
+ assert not r.s.rows('SELECT * FROM group_work_events')
+ r.w.process(lambda:False)
+ assert not r.e.model.calls
+ assert not r.api.sent
+
+
+def test_explicit_mention_overrides_foreign_reply(r):
+ inbound(r,'@TEST_BOT помоги',reply_to_message={'message_id':77,'from':{'id':88,'is_bot':True}})
+ r.w.process(lambda:False)
+ assert len(r.e.model.calls)==1
+ assert len(r.api.sent)==1
+
+
+def test_unaddressed_model_reply_never_interrupts_group(r):
+ inbound(r,'Спасибо')
+ r.w.process(lambda:False)
+ assert len(r.e.model.calls)==1
+ assert not r.api.sent
+ assert r.s.rows('SELECT state FROM group_work_events')[0]['state']=='done'
