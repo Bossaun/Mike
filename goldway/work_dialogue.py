@@ -32,7 +32,7 @@ def conversation(work, message):
         m=json.loads(r['payload'])
         if bool(m.get('private'))!=bool(private) or (private and m['actor']!=actor):continue
         if m.get('at',0)>message.get('at',work.e.now()):continue
-        items.append(dict({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message','forwarded':bool(m.get('forwarded'))}, **({'photo_reading':{k:v[:2000] for k,v in m['photo_reading'].items()}} if m.get('photo_reading') else {})))
+        items.append(dict({'role':'user','actor':m['actor'],'text':m['text'][:1800],'at':m.get('at',0),'kind':'message','forwarded':bool(m.get('forwarded')),'voice_reading':m.get('voice_reading','')[:1800]}, **({'photo_reading':{k:v[:2000] for k,v in m['photo_reading'].items()}} if m.get('photo_reading') else {})))
     return sorted([x for x in items if x['at']<=message.get('at',work.e.now())],key=lambda x:x['at'])[-10:]
 
 

@@ -55,6 +55,27 @@ class Telegram:
         except httpx.HTTPError:
             raise RuntimeError('Telegram image download failed') from None
 
+    def voice(self, file_id):
+        from .voice_reading import MAX_BYTES
+        import re
+        file=self.call('getFile',file_id=file_id)
+        path=file.get('file_path','')
+        if (type(file.get('file_size')) is not int or not 0<file['file_size']<=MAX_BYTES
+                or not isinstance(path,str) or not re.fullmatch(r'[A-Za-z0-9_/.-]{1,512}',path)
+                or path.startswith('/') or '..' in path.split('/')):
+            raise ValueError('Invalid Telegram voice file')
+        try:
+            with self.client.stream('GET',self.base.replace('/bot','/file/bot')+path,follow_redirects=False) as r:
+                if r.status_code!=200:raise ValueError('Voice download unavailable')
+                body=bytearray()
+                for chunk in r.iter_bytes(chunk_size=65536):
+                    body.extend(chunk)
+                    if len(body)>MAX_BYTES:raise ValueError('Voice size limit')
+            body=bytes(body)
+            return body
+        except httpx.HTTPError:
+            raise RuntimeError('Telegram voice download failed') from None
+
     def document(self, file_id):
         file=self.call('getFile',file_id=file_id)
         if type(file.get('file_size')) is not int or not 0 < file['file_size'] <= 64000:

@@ -74,4 +74,4 @@ def transcribe(work,message):
 
 def public_message(message):
     # Telegram file identifiers are private capabilities, never model context.
-    return {k:v for k,v in message.items() if k not in ('image','connection')}
+    return {k:v for k,v in message.items() if k not in ('image','voice','connection')}
